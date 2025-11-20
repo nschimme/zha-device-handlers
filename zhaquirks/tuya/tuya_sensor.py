@@ -67,6 +67,17 @@ class NoManufTimeTuyaMCUCluster(TuyaMCUCluster):
 
 
 (
+    TuyaQuirkBuilder("HOBEIAN", "ZG-303Z")
+    .applies_to("_TZE200_npj9bug3", "TS0601")
+    .tuya_temperature(dp_id=5, scale=10)
+    .tuya_humidity(dp_id=2)
+    .tuya_soil_moisture(dp_id=3)
+    .skip_configuration()
+    .add_to_registry()
+)
+
+
+(
     TuyaQuirkBuilder("_TZE200_bq5c8xfe", "TS0601")
     .applies_to("_TZE200_vs0skpuc", "TS0601")
     .applies_to("_TZE200_qyflbnbj", "TS0601")
