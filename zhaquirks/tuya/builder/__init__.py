@@ -217,6 +217,7 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         power_cfg: PowerConfiguration,
         scale: float,
+        endpoint_id: int | None = None,
     ) -> Self:
         """Add a Tuya Battery Power Configuration."""
         self.tuya_dp(
@@ -224,8 +225,12 @@ class TuyaQuirkBuilder(QuirkBuilder):
             power_cfg.ep_attribute,
             PowerConfiguration.AttributeDefs.battery_percentage_remaining.name,
             converter=lambda x: x * scale,
+            endpoint_id=endpoint_id,
         )
-        self.adds(power_cfg)
+        if endpoint_id is not None:
+            self.adds(power_cfg, endpoint_id=endpoint_id)
+        else:
+            self.adds(power_cfg)
         return self
 
     def tuya_battery(
@@ -236,11 +241,14 @@ class TuyaQuirkBuilder(QuirkBuilder):
         battery_qty: int | None = 2,
         battery_voltage: int | None = None,
         scale: float = 2,
+        endpoint_id: int | None = None,
     ) -> Self:
         """Add a Tuya Battery Power Configuration."""
 
         if power_cfg:
-            return self._tuya_battery(dp_id=dp_id, power_cfg=power_cfg, scale=scale)
+            return self._tuya_battery(
+                dp_id=dp_id, power_cfg=power_cfg, scale=scale, endpoint_id=endpoint_id
+            )
 
         if not battery_voltage and (battery_type and battery_qty):
             battery_voltage = BATTERY_VOLTAGES.get(battery_type)
@@ -417,11 +425,29 @@ class TuyaQuirkBuilder(QuirkBuilder):
         self.adds(onoff_cfg)
         return self
 
+    def removes(self, cluster_id: int, endpoint_id: int | None = None) -> Self:
+        """Remove a cluster from a given endpoint."""
+        if endpoint_id is not None:
+            super().removes(cluster_id, endpoint_id=endpoint_id)
+        else:
+            super().removes(cluster_id)
+        return self
+
+    def _add_cluster(
+        self, cluster: TuyaLocalCluster, endpoint_id: int | None = None
+    ) -> None:
+        """Add a cluster to a given endpoint."""
+        if endpoint_id is not None:
+            self.adds(cluster, endpoint_id=endpoint_id)
+        else:
+            self.adds(cluster)
+
     def tuya_humidity(
         self,
         dp_id: int,
         rh_cfg: TuyaLocalCluster = TuyaRelativeHumidity,
         scale: float = 100,
+        endpoint_id: int | None = None,
     ) -> Self:
         """Add a Tuya Relative Humidity Configuration."""
         self.tuya_dp(
@@ -429,8 +455,9 @@ class TuyaQuirkBuilder(QuirkBuilder):
             rh_cfg.ep_attribute,
             "measured_value",
             converter=lambda x: x * scale,
+            endpoint_id=endpoint_id,
         )
-        self.adds(rh_cfg)
+        self._add_cluster(rh_cfg, endpoint_id)
         return self
 
     def tuya_soil_moisture(
@@ -438,6 +465,7 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         soil_cfg: TuyaLocalCluster = TuyaSoilMoisture,
         scale: float = 100,
+        endpoint_id: int | None = None,
     ) -> Self:
         """Add a Tuya Soil Moisture Configuration."""
         self.tuya_dp(
@@ -445,8 +473,9 @@ class TuyaQuirkBuilder(QuirkBuilder):
             soil_cfg.ep_attribute,
             "measured_value",
             converter=lambda x: x * scale,
+            endpoint_id=endpoint_id,
         )
-        self.adds(soil_cfg)
+        self._add_cluster(soil_cfg, endpoint_id)
         return self
 
     def tuya_temperature(
@@ -454,6 +483,7 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         temp_cfg: TuyaLocalCluster = TuyaTemperatureMeasurement,
         scale: float = 100,
+        endpoint_id: int | None = None,
     ) -> Self:
         """Add a Tuya Temperature Configuration."""
         self.tuya_dp(
@@ -461,8 +491,9 @@ class TuyaQuirkBuilder(QuirkBuilder):
             temp_cfg.ep_attribute,
             "measured_value",
             converter=lambda x: x * scale,
+            endpoint_id=endpoint_id,
         )
-        self.adds(temp_cfg)
+        self._add_cluster(temp_cfg, endpoint_id)
         return self
 
     def tuya_vibration(self, dp_id: int) -> Self:
