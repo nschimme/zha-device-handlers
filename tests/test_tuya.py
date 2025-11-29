@@ -2023,3 +2023,126 @@ async def test_ts601_door_sensor(
     attrs = await cluster.read_attributes(attributes=[attribute])
 
     assert attrs[0].get(attribute) == expected_value
+
+
+async def test_hobeian_zg_303z_sensor(zigpy_device_from_v2_quirk):
+    """Test HOBEIAN ZG-303Z sensor."""
+
+    from tests.common import ClusterListener
+    from zhaquirks.tuya import TuyaCommand, TuyaDPType, TuyaData, TuyaDatapointData
+    from zhaquirks.tuya.tuya_sensor import TuyaTempUnitConvert
+    from zigpy.zcl.clusters.general import PowerConfiguration
+    from zigpy.zcl.clusters.measurement import (
+        RelativeHumidity,
+        SoilMoisture,
+        TemperatureMeasurement,
+    )
+
+    device = zigpy_device_from_v2_quirk("HOBEIAN", "ZG-303Z")
+
+    ep = device.endpoints[1]
+    tuya_cluster = ep.tuya_manufacturer
+
+    # 1. Test that the original RelativeHumidity cluster is removed
+    assert RelativeHumidity.cluster_id not in ep.in_clusters
+
+    # 2. Setup listeners for standard clusters
+    soil_listener = ClusterListener(ep.in_clusters[SoilMoisture.cluster_id])
+    temp_listener = ClusterListener(ep.in_clusters[TemperatureMeasurement.cluster_id])
+    battery_listener = ClusterListener(ep.in_clusters[PowerConfiguration.cluster_id])
+
+    # 3. Test DP 3: Soil Moisture
+    dp_data = TuyaDatapointData(dp=3, data=TuyaData(value=55))
+    tuya_cluster.handle_get_data(
+        TuyaCommand(status=0, tsn=0, datapoints=[dp_data])
+    )
+    assert len(soil_listener.attribute_updates) == 1
+    assert soil_listener.attribute_updates[0][0] == 0
+    assert soil_listener.attribute_updates[0][1] == 5500
+
+    # 4. Test DP 5: Temperature
+    dp_data = TuyaDatapointData(dp=5, data=TuyaData(value=251))
+    tuya_cluster.handle_get_data(
+        TuyaCommand(status=0, tsn=0, datapoints=[dp_data])
+    )
+    assert len(temp_listener.attribute_updates) == 1
+    assert temp_listener.attribute_updates[0][0] == 0
+    assert temp_listener.attribute_updates[0][1] == 2510
+
+    # 5. Test DP 9: Display Unit
+    dp_data = TuyaDatapointData(dp=9, data=TuyaData(value=TuyaTempUnitConvert.Fahrenheit))
+    tuya_cluster.handle_get_data(
+        TuyaCommand(status=0, tsn=0, datapoints=[dp_data])
+    )
+    assert tuya_cluster.get("display_unit") == TuyaTempUnitConvert.Fahrenheit
+
+    # 6. Test DP 15: Battery
+    dp_data = TuyaDatapointData(dp=15, data=TuyaData(value=88))
+    tuya_cluster.handle_get_data(
+        TuyaCommand(status=0, tsn=0, datapoints=[dp_data])
+    )
+    assert len(battery_listener.attribute_updates) == 1
+    assert battery_listener.attribute_updates[0][0] == 33
+    assert battery_listener.attribute_updates[0][1] == 176  # Default scale is 2
+
+    # 7. Test DP 102: Soil Moisture Calibration
+    dp_data = TuyaDatapointData(dp=102, data=TuyaData(value=15))
+    tuya_cluster.handle_get_data(
+        TuyaCommand(status=0, tsn=0, datapoints=[dp_data])
+    )
+    assert tuya_cluster.get("soil_moisture_calibration") == 15
+
+    # 8. Test DP 104: Temperature Calibration
+    dp_data = TuyaDatapointData(dp=104, data=TuyaData(value=-12))  # -1.2
+    tuya_cluster.handle_get_data(
+        TuyaCommand(status=0, tsn=0, datapoints=[dp_data])
+    )
+    assert tuya_cluster.get("temperature_calibration") == -12
+
+    # 9. Test DP 105: Humidity Calibration
+    dp_data = TuyaDatapointData(dp=105, data=TuyaData(value=22))
+    tuya_cluster.handle_get_data(
+        TuyaCommand(status=0, tsn=0, datapoints=[dp_data])
+    )
+    assert tuya_cluster.get("humidity_calibration") == 22
+
+    # 10. Test DP 106: Dry binary sensor
+    dp_data = TuyaDatapointData(dp=106, data=TuyaData(value=True))  # Not dry
+    tuya_cluster.handle_get_data(
+        TuyaCommand(status=0, tsn=0, datapoints=[dp_data])
+    )
+    assert not tuya_cluster.get("dry")
+
+    dp_data = TuyaDatapointData(dp=106, data=TuyaData(value=False))  # Dry
+    tuya_cluster.handle_get_data(
+        TuyaCommand(status=0, tsn=0, datapoints=[dp_data])
+    )
+    assert tuya_cluster.get("dry")
+
+    # 11. Test DP 109: Humidity Sensor
+    dp_data = TuyaDatapointData(dp=109, data=TuyaData(value=68))
+    tuya_cluster.handle_get_data(
+        TuyaCommand(status=0, tsn=0, datapoints=[dp_data])
+    )
+    assert tuya_cluster.get("humidity_value") == 68
+
+    # 12. Test DP 110: Alarm Soil Moisture Min
+    dp_data = TuyaDatapointData(dp=110, data=TuyaData(value=10))
+    tuya_cluster.handle_get_data(
+        TuyaCommand(status=0, tsn=0, datapoints=[dp_data])
+    )
+    assert tuya_cluster.get("alarm_soil_moisture_min") == 10
+
+    # 13. Test DP 111: Temperature Sampling
+    dp_data = TuyaDatapointData(dp=111, data=TuyaData(value=120))
+    tuya_cluster.handle_get_data(
+        TuyaCommand(status=0, tsn=0, datapoints=[dp_data])
+    )
+    assert tuya_cluster.get("temperature_sampling") == 120
+
+    # 14. Test DP 112: Soil Moisture Sampling
+    dp_data = TuyaDatapointData(dp=112, data=TuyaData(value=180))
+    tuya_cluster.handle_get_data(
+        TuyaCommand(status=0, tsn=0, datapoints=[dp_data])
+    )
+    assert tuya_cluster.get("soil_moisture_sampling") == 180
