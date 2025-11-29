@@ -74,13 +74,13 @@ class NoManufTimeTuyaMCUCluster(TuyaMCUCluster):
         "ZG-303Z",
     )
     .applies_to("_TZE200_npj9bug3", "TS0601")
-    .removes(RelativeHumidity.cluster_id, endpoint_id=1)
+    .removes(RelativeHumidity.cluster_id)
     .adds_endpoint(2, device_type=zha.DeviceType.SIMPLE_SENSOR)
     .adds_endpoint(3, device_type=zha.DeviceType.SIMPLE_SENSOR)
-    .tuya_soil_moisture(3, endpoint_id=2)
-    .tuya_temperature(5, scale=10)
-    .tuya_battery(15, scale=1)
-    .tuya_humidity(109, endpoint_id=3)
+    .tuya_soil_moisture(dp_id=3, endpoint_id=2)
+    .tuya_temperature(dp_id=5, scale=10)
+    .tuya_battery(dp_id=15, scale=1)
+    .tuya_humidity(dp_id=109, endpoint_id=3)
     .add_to_registry()
 )
 
