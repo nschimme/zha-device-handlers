@@ -217,6 +217,7 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         power_cfg: PowerConfiguration,
         scale: float,
+        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya Battery Power Configuration."""
         self.tuya_dp(
@@ -224,8 +225,9 @@ class TuyaQuirkBuilder(QuirkBuilder):
             power_cfg.ep_attribute,
             PowerConfiguration.AttributeDefs.battery_percentage_remaining.name,
             converter=lambda x: x * scale,
+            endpoint_id=endpoint_id,
         )
-        self.adds(power_cfg)
+        self.adds(power_cfg, endpoint_id=endpoint_id)
         return self
 
     def tuya_battery(
@@ -236,11 +238,14 @@ class TuyaQuirkBuilder(QuirkBuilder):
         battery_qty: int | None = 2,
         battery_voltage: int | None = None,
         scale: float = 2,
+        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya Battery Power Configuration."""
 
         if power_cfg:
-            return self._tuya_battery(dp_id=dp_id, power_cfg=power_cfg, scale=scale)
+            return self._tuya_battery(
+                dp_id=dp_id, power_cfg=power_cfg, scale=scale, endpoint_id=endpoint_id
+            )
 
         if not battery_voltage and (battery_type and battery_qty):
             battery_voltage = BATTERY_VOLTAGES.get(battery_type)
@@ -255,7 +260,10 @@ class TuyaQuirkBuilder(QuirkBuilder):
             }
 
         return self._tuya_battery(
-            dp_id=dp_id, power_cfg=TuyaPowerConfigurationClusterBattery, scale=scale
+            dp_id=dp_id,
+            power_cfg=TuyaPowerConfigurationClusterBattery,
+            scale=scale,
+            endpoint_id=endpoint_id,
         )
 
     def tuya_illuminance(
@@ -265,6 +273,7 @@ class TuyaQuirkBuilder(QuirkBuilder):
         converter: Callable[[Any], Any] | None = (
             lambda x: 10000 * math.log10(x) + 1 if x != 0 else 0
         ),
+        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya Illuminance Configuration."""
         self.tuya_dp(
@@ -272,16 +281,18 @@ class TuyaQuirkBuilder(QuirkBuilder):
             illuminance_cfg.ep_attribute,
             IlluminanceMeasurement.AttributeDefs.measured_value.name,
             converter=converter,
+            endpoint_id=endpoint_id,
         )
-        self.adds(illuminance_cfg)
+        self.adds(illuminance_cfg, endpoint_id=endpoint_id)
         return self
 
-    def tuya_contact(self, dp_id: int) -> Self:
+    def tuya_contact(self, dp_id: int, endpoint_id: int = 1) -> Self:
         """Add a Tuya IAS contact sensor."""
         self.tuya_ias(
             dp_id=dp_id,
             ias_cfg=TuyaIasContact,
             converter=lambda x: IasZone.ZoneStatus.Alarm_1 if x != 0 else 0,
+            endpoint_id=endpoint_id,
         )
         return self
 
@@ -290,6 +301,7 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         co2_cfg: TuyaLocalCluster = TuyaCO2Concentration,
         scale: float = 1e-6,
+        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya CO2 Configuration."""
         self.tuya_dp(
@@ -297,8 +309,9 @@ class TuyaQuirkBuilder(QuirkBuilder):
             co2_cfg.ep_attribute,
             CarbonDioxideConcentration.AttributeDefs.measured_value.name,
             converter=lambda x: x * scale,
+            endpoint_id=endpoint_id,
         )
-        self.adds(co2_cfg)
+        self.adds(co2_cfg, endpoint_id=endpoint_id)
         return self
 
     def tuya_electrical_conductivity(
@@ -306,6 +319,7 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         ec_cfg: TuyaLocalCluster = TuyaElectricalConductivity,
         scale: float = 1,
+        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya Electrical Conductivity Configuration."""
         self.tuya_dp(
@@ -313,8 +327,9 @@ class TuyaQuirkBuilder(QuirkBuilder):
             ec_cfg.ep_attribute,
             ElectricalConductivity.AttributeDefs.measured_value.name,
             converter=lambda x: x * scale,
+            endpoint_id=endpoint_id,
         )
-        self.adds(ec_cfg)
+        self.adds(ec_cfg, endpoint_id=endpoint_id)
         return self
 
     def tuya_formaldehyde(
@@ -326,6 +341,7 @@ class TuyaQuirkBuilder(QuirkBuilder):
             ((MOL_VOL_AIR_NTP * x) / TuyaFormaldehydeConcentration.MOLECULAR_MASS), 2
         )
         * 1e-6,
+        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya Formaldehyde Configuration."""
         self.tuya_dp(
@@ -333,8 +349,9 @@ class TuyaQuirkBuilder(QuirkBuilder):
             form_cfg.ep_attribute,
             FormaldehydeConcentration.AttributeDefs.measured_value.name,
             converter=converter,
+            endpoint_id=endpoint_id,
         )
-        self.adds(form_cfg)
+        self.adds(form_cfg, endpoint_id=endpoint_id)
         return self
 
     def tuya_pm25(
@@ -342,6 +359,7 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         pm25_cfg: TuyaLocalCluster = TuyaPM25Concentration,
         scale: float = 1,
+        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya PM25 Configuration."""
         self.tuya_dp(
@@ -349,25 +367,28 @@ class TuyaQuirkBuilder(QuirkBuilder):
             pm25_cfg.ep_attribute,
             PM25.AttributeDefs.measured_value.name,
             converter=lambda x: x * scale,
+            endpoint_id=endpoint_id,
         )
-        self.adds(pm25_cfg)
+        self.adds(pm25_cfg, endpoint_id=endpoint_id)
         return self
 
-    def tuya_gas(self, dp_id: int) -> Self:
+    def tuya_gas(self, dp_id: int, endpoint_id: int = 1) -> Self:
         """Add a Tuya IAS gas sensor."""
         self.tuya_ias(
             dp_id=dp_id,
             ias_cfg=TuyaIasGas,
             converter=lambda x: IasZone.ZoneStatus.Alarm_1 if x == 0 else 0,
+            endpoint_id=endpoint_id,
         )
         return self
 
-    def tuya_smoke(self, dp_id: int) -> Self:
+    def tuya_smoke(self, dp_id: int, endpoint_id: int = 1) -> Self:
         """Add a Tuya IAS smoke/fire sensor."""
         self.tuya_ias(
             dp_id=dp_id,
             ias_cfg=TuyaIasFire,
             converter=lambda x: IasZone.ZoneStatus.Alarm_1 if x == 0 else 0,
+            endpoint_id=endpoint_id,
         )
         return self
 
@@ -376,6 +397,7 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         ias_cfg: TuyaLocalCluster,
         converter: Callable[[Any], Any] | None = None,
+        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya IAS Configuration."""
         self.tuya_dp(
@@ -383,8 +405,9 @@ class TuyaQuirkBuilder(QuirkBuilder):
             ias_cfg.ep_attribute,
             IasZone.AttributeDefs.zone_status.name,
             converter=converter,
+            endpoint_id=endpoint_id,
         )
-        self.adds(ias_cfg)
+        self.adds(ias_cfg, endpoint_id=endpoint_id)
         return self
 
     def tuya_metering(
@@ -392,6 +415,7 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         metering_cfg: TuyaLocalCluster = TuyaValveWaterConsumedNoInstDemand,
         scale: float = 1,
+        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya Metering Configuration."""
         self.tuya_dp(
@@ -399,22 +423,25 @@ class TuyaQuirkBuilder(QuirkBuilder):
             metering_cfg.ep_attribute,
             attribute_name="current_summ_delivered",
             converter=lambda x: x * scale,
+            endpoint_id=endpoint_id,
         )
-        self.adds(metering_cfg)
+        self.adds(metering_cfg, endpoint_id=endpoint_id)
         return self
 
     def tuya_onoff(
         self,
         dp_id: int,
         onoff_cfg: TuyaLocalCluster = TuyaOnOffNM,
+        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya OnOff Configuration."""
         self.tuya_dp(
             dp_id,
             onoff_cfg.ep_attribute,
             "on_off",
+            endpoint_id=endpoint_id,
         )
-        self.adds(onoff_cfg)
+        self.adds(onoff_cfg, endpoint_id=endpoint_id)
         return self
 
     def tuya_humidity(
@@ -422,6 +449,7 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         rh_cfg: TuyaLocalCluster = TuyaRelativeHumidity,
         scale: float = 100,
+        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya Relative Humidity Configuration."""
         self.tuya_dp(
@@ -429,8 +457,9 @@ class TuyaQuirkBuilder(QuirkBuilder):
             rh_cfg.ep_attribute,
             "measured_value",
             converter=lambda x: x * scale,
+            endpoint_id=endpoint_id,
         )
-        self.adds(rh_cfg)
+        self.adds(rh_cfg, endpoint_id=endpoint_id)
         return self
 
     def tuya_soil_moisture(
@@ -438,6 +467,7 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         soil_cfg: TuyaLocalCluster = TuyaSoilMoisture,
         scale: float = 100,
+        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya Soil Moisture Configuration."""
         self.tuya_dp(
@@ -445,8 +475,9 @@ class TuyaQuirkBuilder(QuirkBuilder):
             soil_cfg.ep_attribute,
             "measured_value",
             converter=lambda x: x * scale,
+            endpoint_id=endpoint_id,
         )
-        self.adds(soil_cfg)
+        self.adds(soil_cfg, endpoint_id=endpoint_id)
         return self
 
     def tuya_temperature(
@@ -454,6 +485,7 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         temp_cfg: TuyaLocalCluster = TuyaTemperatureMeasurement,
         scale: float = 100,
+        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya Temperature Configuration."""
         self.tuya_dp(
@@ -461,16 +493,18 @@ class TuyaQuirkBuilder(QuirkBuilder):
             temp_cfg.ep_attribute,
             "measured_value",
             converter=lambda x: x * scale,
+            endpoint_id=endpoint_id,
         )
-        self.adds(temp_cfg)
+        self.adds(temp_cfg, endpoint_id=endpoint_id)
         return self
 
-    def tuya_vibration(self, dp_id: int) -> Self:
+    def tuya_vibration(self, dp_id: int, endpoint_id: int = 1) -> Self:
         """Add a Tuya IAS vibration sensor."""
         self.tuya_ias(
             dp_id=dp_id,
             ias_cfg=TuyaIasVibration,
             converter=lambda x: IasZone.ZoneStatus.Alarm_1 if x != 0 else 0,
+            endpoint_id=endpoint_id,
         )
         return self
 
@@ -479,6 +513,7 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         voc_cfg: TuyaLocalCluster = TuyaAirQualityVOC,
         scale: float = 1e-6,
+        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya VOC Configuration."""
         self.tuya_dp(
@@ -486,8 +521,9 @@ class TuyaQuirkBuilder(QuirkBuilder):
             voc_cfg.ep_attribute,
             TuyaAirQualityVOC.AttributeDefs.measured_value.name,
             converter=lambda x: x * scale,
+            endpoint_id=endpoint_id,
         )
-        self.adds(voc_cfg)
+        self.adds(voc_cfg, endpoint_id=endpoint_id)
         return self
 
     def tuya_attribute(
