@@ -11,6 +11,7 @@ import zigpy.types as t
 from zigpy.zcl.clusters.measurement import OccupancySensing
 from zigpy.zcl.clusters.security import IasZone
 
+from zhaquirks import DoublingPowerConfigurationCluster
 from zhaquirks.tuya import TuyaLocalCluster
 from zhaquirks.tuya.builder import TuyaQuirkBuilder
 
@@ -442,6 +443,18 @@ base_tuya_motion = (
         ias_cfg=TuyaMotionWithReset,
         converter=lambda x: IasZone.ZoneStatus.Alarm_1 if x == 2 else 0,
     )
+    .skip_configuration()
+    .add_to_registry()
+)
+
+
+# Tuya PIR Motion Sensor SNZB-03/TS0202
+(
+    TuyaQuirkBuilder("_TZ3000_bb6xaihh", "SNZB-03")
+    .applies_to("_TZ3040_bb6xaihh", "TS0202")
+    .replaces(TuyaMotionWithReset)
+    .replaces(DoublingPowerConfigurationCluster)
+    .tuya_enchantment()
     .skip_configuration()
     .add_to_registry()
 )
