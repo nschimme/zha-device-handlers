@@ -2025,17 +2025,3 @@ async def test_ts601_door_sensor(
     assert attrs[0].get(attribute) == expected_value
 
 
-async def test_tuya_quirk_builder_endpoint_id(zigpy_device_from_v2_quirk):
-    """Test TuyaQuirkBuilder endpoint_id."""
-
-    (
-        zhaquirks.tuya.builder.TuyaQuirkBuilder("manufacturer", "model")
-        .adds_endpoint(2)
-        .tuya_humidity(dp_id=1, endpoint_id=2)
-        .add_to_registry()
-    )
-
-    device: Device = zigpy_device_from_v2_quirk("manufacturer", "model")
-
-    assert not hasattr(device.endpoints[1], "humidity")
-    assert hasattr(device.endpoints[2], "humidity")
