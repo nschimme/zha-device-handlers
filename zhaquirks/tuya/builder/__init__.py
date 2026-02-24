@@ -10,13 +10,19 @@ from typing import Any, Self
 
 from zigpy.quirks import _DEVICE_REGISTRY
 from zigpy.quirks.registry import DeviceRegistry
-from zigpy.quirks.v2 import CustomDeviceV2, QuirkBuilder, QuirksV2RegistryEntry
+from zigpy.quirks.v2 import (
+    ClusterType,
+    CustomCluster,
+    CustomDeviceV2,
+    QuirkBuilder,
+    QuirksV2RegistryEntry,
+)
 from zigpy.quirks.v2.homeassistant import EntityPlatform, EntityType
 from zigpy.quirks.v2.homeassistant.binary_sensor import BinarySensorDeviceClass
 from zigpy.quirks.v2.homeassistant.number import NumberDeviceClass
 from zigpy.quirks.v2.homeassistant.sensor import SensorDeviceClass, SensorStateClass
 import zigpy.types as t
-from zigpy.zcl import foundation
+from zigpy.zcl import Cluster, foundation
 from zigpy.zcl.clusters.measurement import (
     PM25,
     CarbonDioxideConcentration,
@@ -204,6 +210,7 @@ class TuyaQuirkBuilder(QuirkBuilder):
         self.tuya_data_point_handlers: dict[int, str] = {}
         self.tuya_dp_to_attribute: dict[int, list[DPToAttributeMapping]] = {}
         self.new_attributes: set[foundation.ZCLAttributeDef] = set()
+        self._endpoint_cluster_attrs: set[tuple[int, str, str]] = set()
         super().__init__(manufacturer, model, registry)
         # quirk_file will point to the init call above if called from this QuirkBuilder,
         # so we need to re-set it correctly
@@ -212,14 +219,64 @@ class TuyaQuirkBuilder(QuirkBuilder):
         self.quirk_file = pathlib.Path(caller.f_code.co_filename)
         self.quirk_file_line = caller.f_lineno
 
+    def _get_auto_endpoint(
+        self, ep_attribute: str, attribute_name: str | tuple[str, ...]
+    ) -> int:
+        """Get an available endpoint for the given cluster and attribute."""
+        if isinstance(attribute_name, str):
+            attribute_names = (attribute_name,)
+        else:
+            attribute_names = attribute_name
+
+        # Humidity and Soil Moisture are considered conflicting
+        conflicting_ep_attributes = {ep_attribute}
+        if ep_attribute in ("humidity", "soil_moisture"):
+            conflicting_ep_attributes.update({"humidity", "soil_moisture"})
+
+        endpoint_id = 1
+        while any(
+            (endpoint_id, conflicting_ep_attr, attr) in self._endpoint_cluster_attrs
+            for attr in attribute_names
+            for conflicting_ep_attr in conflicting_ep_attributes
+        ):
+            endpoint_id += 1
+        return endpoint_id
+
+    def _ensure_endpoint(self, endpoint_id: int) -> None:
+        """Ensure the given endpoint exists."""
+        if endpoint_id == 1:
+            return
+
+        # Check if already added
+        if any(
+            metadata.endpoint_id == endpoint_id for metadata in self.adds_endpoint_metadata
+        ):
+            return
+
+        self.adds_endpoint(endpoint_id)
+
+    def adds(
+        self,
+        cluster: int | type[Cluster | CustomCluster],
+        cluster_type: ClusterType = ClusterType.Server,
+        endpoint_id: int = 1,
+        constant_attributes: dict[foundation.ZCLAttributeDef, Any] | None = None,
+    ) -> Self:
+        """Add a cluster to an endpoint."""
+        self._ensure_endpoint(endpoint_id)
+        return super().adds(cluster, cluster_type, endpoint_id, constant_attributes)
+
     def _tuya_battery(
         self,
         dp_id: int,
         power_cfg: PowerConfiguration,
         scale: float,
-        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya Battery Power Configuration."""
+        endpoint_id = self._get_auto_endpoint(
+            power_cfg.ep_attribute,
+            PowerConfiguration.AttributeDefs.battery_percentage_remaining.name,
+        )
         self.tuya_dp(
             dp_id,
             power_cfg.ep_attribute,
@@ -238,14 +295,11 @@ class TuyaQuirkBuilder(QuirkBuilder):
         battery_qty: int | None = 2,
         battery_voltage: int | None = None,
         scale: float = 2,
-        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya Battery Power Configuration."""
 
         if power_cfg:
-            return self._tuya_battery(
-                dp_id=dp_id, power_cfg=power_cfg, scale=scale, endpoint_id=endpoint_id
-            )
+            return self._tuya_battery(dp_id=dp_id, power_cfg=power_cfg, scale=scale)
 
         if not battery_voltage and (battery_type and battery_qty):
             battery_voltage = BATTERY_VOLTAGES.get(battery_type)
@@ -263,7 +317,6 @@ class TuyaQuirkBuilder(QuirkBuilder):
             dp_id=dp_id,
             power_cfg=TuyaPowerConfigurationClusterBattery,
             scale=scale,
-            endpoint_id=endpoint_id,
         )
 
     def tuya_illuminance(
@@ -273,9 +326,12 @@ class TuyaQuirkBuilder(QuirkBuilder):
         converter: Callable[[Any], Any] | None = (
             lambda x: 10000 * math.log10(x) + 1 if x != 0 else 0
         ),
-        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya Illuminance Configuration."""
+        endpoint_id = self._get_auto_endpoint(
+            illuminance_cfg.ep_attribute,
+            IlluminanceMeasurement.AttributeDefs.measured_value.name,
+        )
         self.tuya_dp(
             dp_id,
             illuminance_cfg.ep_attribute,
@@ -286,13 +342,12 @@ class TuyaQuirkBuilder(QuirkBuilder):
         self.adds(illuminance_cfg, endpoint_id=endpoint_id)
         return self
 
-    def tuya_contact(self, dp_id: int, endpoint_id: int = 1) -> Self:
+    def tuya_contact(self, dp_id: int) -> Self:
         """Add a Tuya IAS contact sensor."""
         self.tuya_ias(
             dp_id=dp_id,
             ias_cfg=TuyaIasContact,
             converter=lambda x: IasZone.ZoneStatus.Alarm_1 if x != 0 else 0,
-            endpoint_id=endpoint_id,
         )
         return self
 
@@ -301,9 +356,12 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         co2_cfg: TuyaLocalCluster = TuyaCO2Concentration,
         scale: float = 1e-6,
-        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya CO2 Configuration."""
+        endpoint_id = self._get_auto_endpoint(
+            co2_cfg.ep_attribute,
+            CarbonDioxideConcentration.AttributeDefs.measured_value.name,
+        )
         self.tuya_dp(
             dp_id,
             co2_cfg.ep_attribute,
@@ -319,9 +377,12 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         ec_cfg: TuyaLocalCluster = TuyaElectricalConductivity,
         scale: float = 1,
-        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya Electrical Conductivity Configuration."""
+        endpoint_id = self._get_auto_endpoint(
+            ec_cfg.ep_attribute,
+            ElectricalConductivity.AttributeDefs.measured_value.name,
+        )
         self.tuya_dp(
             dp_id,
             ec_cfg.ep_attribute,
@@ -341,9 +402,12 @@ class TuyaQuirkBuilder(QuirkBuilder):
             ((MOL_VOL_AIR_NTP * x) / TuyaFormaldehydeConcentration.MOLECULAR_MASS), 2
         )
         * 1e-6,
-        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya Formaldehyde Configuration."""
+        endpoint_id = self._get_auto_endpoint(
+            form_cfg.ep_attribute,
+            FormaldehydeConcentration.AttributeDefs.measured_value.name,
+        )
         self.tuya_dp(
             dp_id,
             form_cfg.ep_attribute,
@@ -359,9 +423,12 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         pm25_cfg: TuyaLocalCluster = TuyaPM25Concentration,
         scale: float = 1,
-        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya PM25 Configuration."""
+        endpoint_id = self._get_auto_endpoint(
+            pm25_cfg.ep_attribute,
+            PM25.AttributeDefs.measured_value.name,
+        )
         self.tuya_dp(
             dp_id,
             pm25_cfg.ep_attribute,
@@ -372,23 +439,21 @@ class TuyaQuirkBuilder(QuirkBuilder):
         self.adds(pm25_cfg, endpoint_id=endpoint_id)
         return self
 
-    def tuya_gas(self, dp_id: int, endpoint_id: int = 1) -> Self:
+    def tuya_gas(self, dp_id: int) -> Self:
         """Add a Tuya IAS gas sensor."""
         self.tuya_ias(
             dp_id=dp_id,
             ias_cfg=TuyaIasGas,
             converter=lambda x: IasZone.ZoneStatus.Alarm_1 if x == 0 else 0,
-            endpoint_id=endpoint_id,
         )
         return self
 
-    def tuya_smoke(self, dp_id: int, endpoint_id: int = 1) -> Self:
+    def tuya_smoke(self, dp_id: int) -> Self:
         """Add a Tuya IAS smoke/fire sensor."""
         self.tuya_ias(
             dp_id=dp_id,
             ias_cfg=TuyaIasFire,
             converter=lambda x: IasZone.ZoneStatus.Alarm_1 if x == 0 else 0,
-            endpoint_id=endpoint_id,
         )
         return self
 
@@ -397,9 +462,12 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         ias_cfg: TuyaLocalCluster,
         converter: Callable[[Any], Any] | None = None,
-        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya IAS Configuration."""
+        endpoint_id = self._get_auto_endpoint(
+            ias_cfg.ep_attribute,
+            IasZone.AttributeDefs.zone_status.name,
+        )
         self.tuya_dp(
             dp_id,
             ias_cfg.ep_attribute,
@@ -415,9 +483,11 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         metering_cfg: TuyaLocalCluster = TuyaValveWaterConsumedNoInstDemand,
         scale: float = 1,
-        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya Metering Configuration."""
+        endpoint_id = self._get_auto_endpoint(
+            metering_cfg.ep_attribute, "current_summ_delivered"
+        )
         self.tuya_dp(
             dp_id,
             metering_cfg.ep_attribute,
@@ -432,9 +502,9 @@ class TuyaQuirkBuilder(QuirkBuilder):
         self,
         dp_id: int,
         onoff_cfg: TuyaLocalCluster = TuyaOnOffNM,
-        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya OnOff Configuration."""
+        endpoint_id = self._get_auto_endpoint(onoff_cfg.ep_attribute, "on_off")
         self.tuya_dp(
             dp_id,
             onoff_cfg.ep_attribute,
@@ -449,9 +519,9 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         rh_cfg: TuyaLocalCluster = TuyaRelativeHumidity,
         scale: float = 100,
-        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya Relative Humidity Configuration."""
+        endpoint_id = self._get_auto_endpoint(rh_cfg.ep_attribute, "measured_value")
         self.tuya_dp(
             dp_id,
             rh_cfg.ep_attribute,
@@ -467,9 +537,9 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         soil_cfg: TuyaLocalCluster = TuyaSoilMoisture,
         scale: float = 100,
-        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya Soil Moisture Configuration."""
+        endpoint_id = self._get_auto_endpoint(soil_cfg.ep_attribute, "measured_value")
         self.tuya_dp(
             dp_id,
             soil_cfg.ep_attribute,
@@ -485,9 +555,9 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         temp_cfg: TuyaLocalCluster = TuyaTemperatureMeasurement,
         scale: float = 100,
-        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya Temperature Configuration."""
+        endpoint_id = self._get_auto_endpoint(temp_cfg.ep_attribute, "measured_value")
         self.tuya_dp(
             dp_id,
             temp_cfg.ep_attribute,
@@ -498,13 +568,12 @@ class TuyaQuirkBuilder(QuirkBuilder):
         self.adds(temp_cfg, endpoint_id=endpoint_id)
         return self
 
-    def tuya_vibration(self, dp_id: int, endpoint_id: int = 1) -> Self:
+    def tuya_vibration(self, dp_id: int) -> Self:
         """Add a Tuya IAS vibration sensor."""
         self.tuya_ias(
             dp_id=dp_id,
             ias_cfg=TuyaIasVibration,
             converter=lambda x: IasZone.ZoneStatus.Alarm_1 if x != 0 else 0,
-            endpoint_id=endpoint_id,
         )
         return self
 
@@ -513,9 +582,11 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         voc_cfg: TuyaLocalCluster = TuyaAirQualityVOC,
         scale: float = 1e-6,
-        endpoint_id: int = 1,
     ) -> Self:
         """Add a Tuya VOC Configuration."""
+        endpoint_id = self._get_auto_endpoint(
+            voc_cfg.ep_attribute, TuyaAirQualityVOC.AttributeDefs.measured_value.name
+        )
         self.tuya_dp(
             dp_id,
             voc_cfg.ep_attribute,
@@ -553,7 +624,7 @@ class TuyaQuirkBuilder(QuirkBuilder):
         self,
         dp_id: int,
         ep_attribute: str,
-        attribute_name: str,
+        attribute_name: str | tuple[str, ...],
         converter: Callable[[Any], Any] | None = None,
         dp_converter: Callable[[Any], Any] | None = None,
         endpoint_id: int | None = None,
@@ -586,6 +657,22 @@ class TuyaQuirkBuilder(QuirkBuilder):
 
         if dp_id in self.tuya_dp_to_attribute:
             raise ValueError(f"DP {dp_id} is already mapped.")
+
+        for mapping in attribute_mapping:
+            if mapping.endpoint_id is None:
+                mapping.endpoint_id = self._get_auto_endpoint(
+                    mapping.ep_attribute, mapping.attribute_name
+                )
+
+            if isinstance(mapping.attribute_name, str):
+                attribute_names = (mapping.attribute_name,)
+            else:
+                attribute_names = mapping.attribute_name
+
+            for attr in attribute_names:
+                self._endpoint_cluster_attrs.add(
+                    (mapping.endpoint_id, mapping.ep_attribute, attr)
+                )
 
         self.tuya_dp_to_attribute.update({dp_id: attribute_mapping})
         self.tuya_data_point_handlers.update({dp_id: dp_handler})
@@ -627,7 +714,6 @@ class TuyaQuirkBuilder(QuirkBuilder):
         self,
         dp_id: int,
         attribute_name: str = "on_off",
-        endpoint_id: int = 1,
         force_inverted: bool = False,
         invert_attribute_name: str | None = None,
         off_value: int = 0,
@@ -645,12 +731,16 @@ class TuyaQuirkBuilder(QuirkBuilder):
 
         This method allows exposing a switch entity in Home Assistant.
         """
+        endpoint_id = self._get_auto_endpoint(
+            TuyaMCUCluster.ep_attribute, attribute_name
+        )
         self.tuya_dp_attribute(
             dp_id=dp_id,
             attribute_name=attribute_name,
             type=t.Bool,
             access=foundation.ZCLAttributeAccess.Read
             | foundation.ZCLAttributeAccess.Write,
+            endpoint_id=endpoint_id,
         )
         self.switch(
             attribute_name=attribute_name,
@@ -677,7 +767,6 @@ class TuyaQuirkBuilder(QuirkBuilder):
         enum_class: type[Enum],
         access: foundation.ZCLAttributeAccess = foundation.ZCLAttributeAccess.Read
         | foundation.ZCLAttributeAccess.Write,
-        endpoint_id: int = 1,
         entity_platform: EntityPlatform = EntityPlatform.SELECT,
         entity_type: EntityType = EntityType.CONFIG,
         initially_disabled: bool = False,
@@ -691,11 +780,15 @@ class TuyaQuirkBuilder(QuirkBuilder):
 
         This method allows exposing an enum based entity in Home Assistant.
         """
+        endpoint_id = self._get_auto_endpoint(
+            TuyaMCUCluster.ep_attribute, attribute_name
+        )
         self.tuya_dp_attribute(
             dp_id=dp_id,
             attribute_name=attribute_name,
             type=enum_class,
             access=access,
+            endpoint_id=endpoint_id,
         )
         self.enum(
             attribute_name=attribute_name,
@@ -720,7 +813,6 @@ class TuyaQuirkBuilder(QuirkBuilder):
         attribute_name: str,
         access: foundation.ZCLAttributeAccess = foundation.ZCLAttributeAccess.Read
         | foundation.ZCLAttributeAccess.Write,
-        endpoint_id: int = 1,
         min_value: float | None = None,
         max_value: float | None = None,
         step: float | None = None,
@@ -740,11 +832,15 @@ class TuyaQuirkBuilder(QuirkBuilder):
 
         This method allows exposing a number entity in Home Assistant.
         """
+        endpoint_id = self._get_auto_endpoint(
+            TuyaMCUCluster.ep_attribute, attribute_name
+        )
         self.tuya_dp_attribute(
             dp_id=dp_id,
             attribute_name=attribute_name,
             type=type,
             access=access,
+            endpoint_id=endpoint_id,
         )
         self.number(
             attribute_name=attribute_name,
@@ -771,7 +867,6 @@ class TuyaQuirkBuilder(QuirkBuilder):
         self,
         dp_id: int,
         attribute_name: str,
-        endpoint_id: int = 1,
         entity_type: EntityType = EntityType.DIAGNOSTIC,
         device_class: BinarySensorDeviceClass | None = None,
         initially_disabled: bool = False,
@@ -785,12 +880,16 @@ class TuyaQuirkBuilder(QuirkBuilder):
 
         This method allows exposing a binary sensor entity in Home Assistant.
         """
+        endpoint_id = self._get_auto_endpoint(
+            TuyaMCUCluster.ep_attribute, attribute_name
+        )
         self.tuya_dp_attribute(
             dp_id=dp_id,
             attribute_name=attribute_name,
             type=t.Bool,
             access=foundation.ZCLAttributeAccess.Read
             | foundation.ZCLAttributeAccess.Report,
+            endpoint_id=endpoint_id,
         )
         self.binary_sensor(
             attribute_name=attribute_name,
@@ -814,7 +913,6 @@ class TuyaQuirkBuilder(QuirkBuilder):
         type: type,
         converter: Callable[[Any], Any] | None = None,
         dp_converter: Callable[[Any], Any] | None = None,
-        endpoint_id: int = 1,
         divisor: int = 1,
         multiplier: int = 1,
         entity_type: EntityType = EntityType.STANDARD,
@@ -833,6 +931,9 @@ class TuyaQuirkBuilder(QuirkBuilder):
         This method allows exposing a sensor entity in Home Assistant.
         """
 
+        endpoint_id = self._get_auto_endpoint(
+            TuyaMCUCluster.ep_attribute, attribute_name
+        )
         self.tuya_dp_attribute(
             dp_id=dp_id,
             attribute_name=attribute_name,
@@ -841,6 +942,7 @@ class TuyaQuirkBuilder(QuirkBuilder):
             dp_converter=dp_converter,
             access=foundation.ZCLAttributeAccess.Read
             | foundation.ZCLAttributeAccess.Report,
+            endpoint_id=endpoint_id,
         )
         self.sensor(
             attribute_name=attribute_name,
@@ -920,4 +1022,5 @@ class TuyaQuirkBuilder(QuirkBuilder):
             TuyaReplacementCluster.mcu_write_command = mcu_write_command
 
             self.replaces(TuyaReplacementCluster)
+
         return super().add_to_registry()
