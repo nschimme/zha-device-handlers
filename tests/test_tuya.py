@@ -1999,7 +1999,14 @@ async def test_ts601_door_sensor(
             )
         )
 
-    cluster = getattr(device.endpoints[1], ep_attr)
-    attrs = await cluster.read_attributes(attributes=[attribute])
+    # Check all endpoints for the attribute update
+    found = False
+    for endpoint in device.endpoints.values():
+        if hasattr(endpoint, ep_attr):
+            cluster = getattr(endpoint, ep_attr)
+            attrs = await cluster.read_attributes(attributes=[attribute])
+            if attrs[0].get(attribute) == expected_value:
+                found = True
+                break
 
-    assert attrs[0].get(attribute) == expected_value
+    assert found

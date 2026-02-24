@@ -586,3 +586,57 @@ async def test_tuya_quirk_builder_endpoint_id(device_mock):
 
     assert hasattr(quirked.endpoints[1], "soil_moisture")
     assert not hasattr(quirked.endpoints[2], "soil_moisture")
+
+async def test_tuya_quirk_builder_auto_endpoint(device_mock):
+    """Test TuyaQuirkBuilder automatic endpoint allocation for conflicting clusters."""
+
+    registry = DeviceRegistry()
+
+    (
+        TuyaQuirkBuilder(device_mock.manufacturer, device_mock.model, registry=registry)
+        .tuya_humidity(dp_id=1)
+        .tuya_soil_moisture(dp_id=2)  # Should move to EP 2 (same attribute name and unit)
+        .tuya_onoff(dp_id=3)
+        .tuya_onoff(dp_id=4)  # Should move to EP 3 (duplicate cluster ID)
+        .skip_configuration()
+        .add_to_registry()
+    )
+
+    quirked = registry.get_device(device_mock)
+    assert isinstance(quirked, CustomDeviceV2)
+
+    # EP 1: humidity, on_off (dp_id=3)
+    assert hasattr(quirked.endpoints[1], "humidity")
+    assert hasattr(quirked.endpoints[1], "on_off")
+    assert not hasattr(quirked.endpoints[1], "soil_moisture")
+
+    # EP 2: soil_moisture (moved due to conflict with humidity), on_off (dp_id=4)
+    # Note: dp_id=4 on_off moves here because EP 1 already has one.
+    assert hasattr(quirked.endpoints[2], "soil_moisture")
+    assert not hasattr(quirked.endpoints[2], "humidity")
+    assert hasattr(quirked.endpoints[2], "on_off")
+
+    # There is no EP 3 because EP 2 was available for the second on_off
+    assert 3 not in quirked.endpoints
+
+
+async def test_tuya_quirk_builder_temp_humidity_same_endpoint(device_mock):
+    """Test that Temperature and Humidity stay on the same endpoint."""
+
+    registry = DeviceRegistry()
+
+    (
+        TuyaQuirkBuilder(device_mock.manufacturer, device_mock.model, registry=registry)
+        .tuya_temperature(dp_id=1)
+        .tuya_humidity(dp_id=2)
+        .skip_configuration()
+        .add_to_registry()
+    )
+
+    quirked = registry.get_device(device_mock)
+    assert isinstance(quirked, CustomDeviceV2)
+
+    # Both should be on EP 1
+    assert hasattr(quirked.endpoints[1], "temperature")
+    assert hasattr(quirked.endpoints[1], "humidity")
+    assert 2 not in quirked.endpoints

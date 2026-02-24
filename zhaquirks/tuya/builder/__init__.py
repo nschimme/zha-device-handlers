@@ -9,7 +9,18 @@ from types import FrameType
 from typing import Any, Self
 
 from zigpy.quirks.v2 import CustomDeviceV2, QuirkBuilder, QuirksV2RegistryEntry
-from zigpy.quirks.v2.homeassistant import EntityPlatform, EntityType
+from zigpy.quirks.v2.homeassistant import (
+    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+    CONCENTRATION_PARTS_PER_MILLION,
+    LIGHT_LUX,
+    PERCENTAGE,
+    EntityPlatform,
+    EntityType,
+    UnitOfConductivity,
+    UnitOfPressure,
+    UnitOfTemperature,
+    UnitOfVolume,
+)
 from zigpy.quirks.v2.homeassistant.binary_sensor import BinarySensorDeviceClass
 from zigpy.quirks.v2.homeassistant.number import NumberDeviceClass
 from zigpy.quirks.v2.homeassistant.sensor import SensorDeviceClass, SensorStateClass
@@ -41,6 +52,93 @@ from zhaquirks.tuya import (
 from zhaquirks.tuya.mcu import DPToAttributeMapping, TuyaMCUCluster, TuyaOnOffNM
 
 MOL_VOL_AIR_NTP = 0.2445  # molar volume of air at NTP in cL/mol
+
+
+_TUYA_CLUSTER_METADATA = {
+    CarbonDioxideConcentration.cluster_id: {
+        "device_class": SensorDeviceClass.CO2,
+        "state_class": SensorStateClass.MEASUREMENT,
+        "unit": CONCENTRATION_PARTS_PER_MILLION,
+        "multiplier": 1e6,
+        "translation_key": "carbon_dioxide",
+        "fallback_name": "Carbon dioxide",
+    },
+    ElectricalConductivity.cluster_id: {
+        "device_class": SensorDeviceClass.CONDUCTIVITY,
+        "state_class": SensorStateClass.MEASUREMENT,
+        "unit": UnitOfConductivity.MICROSIEMENS_PER_CM,
+        "translation_key": "electrical_conductivity",
+        "fallback_name": "Electrical conductivity",
+    },
+    FormaldehydeConcentration.cluster_id: {
+        "state_class": SensorStateClass.MEASUREMENT,
+        "unit": CONCENTRATION_PARTS_PER_MILLION,
+        "multiplier": 1e6,
+        "translation_key": "formaldehyde",
+        "fallback_name": "Formaldehyde",
+    },
+    IlluminanceMeasurement.cluster_id: {
+        "device_class": SensorDeviceClass.ILLUMINANCE,
+        "state_class": SensorStateClass.MEASUREMENT,
+        "unit": LIGHT_LUX,
+        "translation_key": "illuminance",
+        "fallback_name": "Illuminance",
+    },
+    PM25.cluster_id: {
+        "device_class": SensorDeviceClass.PM25,
+        "state_class": SensorStateClass.MEASUREMENT,
+        "unit": CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        "translation_key": "pm25",
+        "fallback_name": "Particulate matter 2.5µm",
+    },
+    RelativeHumidity.cluster_id: {
+        "device_class": SensorDeviceClass.HUMIDITY,
+        "state_class": SensorStateClass.MEASUREMENT,
+        "unit": PERCENTAGE,
+        "multiplier": 0.01,
+        "translation_key": "humidity",
+        "fallback_name": "Humidity",
+    },
+    SoilMoisture.cluster_id: {
+        "device_class": SensorDeviceClass.MOISTURE,
+        "state_class": SensorStateClass.MEASUREMENT,
+        "unit": PERCENTAGE,
+        "multiplier": 0.01,
+        "translation_key": "soil_moisture",
+        "fallback_name": "Soil moisture",
+    },
+    TemperatureMeasurement.cluster_id: {
+        "device_class": SensorDeviceClass.TEMPERATURE,
+        "state_class": SensorStateClass.MEASUREMENT,
+        "unit": UnitOfTemperature.CELSIUS,
+        "multiplier": 0.01,
+        "translation_key": "temperature",
+        "fallback_name": "Temperature",
+    },
+    # Tuya Air Quality VOC Level (Custom Cluster)
+    0x042E: {
+        "device_class": SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS,
+        "state_class": SensorStateClass.MEASUREMENT,
+        "unit": CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        "translation_key": "voc",
+        "fallback_name": "VOC",
+    },
+    # Metering
+    Metering.cluster_id: {
+        "device_class": SensorDeviceClass.WATER,
+        "state_class": SensorStateClass.TOTAL_INCREASING,
+        "unit": UnitOfVolume.LITERS,
+        "translation_key": "water_consumed",
+        "fallback_name": "Water consumed",
+    },
+    # Battery
+    PowerConfiguration.cluster_id: {
+        "device_class": SensorDeviceClass.BATTERY,
+        "unit": PERCENTAGE,
+        "translation_key": "battery",
+        "fallback_name": "Battery",
+    },
+}
 
 
 BATTERY_VOLTAGES = {
@@ -206,22 +304,108 @@ class TuyaQuirkBuilder(QuirkBuilder):
         self.quirk_file = pathlib.Path(caller.f_code.co_filename)
         self.quirk_file_line = caller.f_lineno
 
-    def _tuya_battery(
+    def _get_auto_endpoint_id(
+        self,
+        cluster_id: int,
+        endpoint_id: int,
+        attribute_name: str | None = None,
+        unit: str | None = None,
+    ) -> int:
+        """Get an endpoint ID for the cluster, auto-incrementing if there's a conflict."""
+
+        def get_cluster_id(m):
+            if hasattr(m, "cluster"):  # AddsMetadata
+                c = m.cluster
+            elif hasattr(m, "add"):  # ReplacesMetadata
+                c = m.add.cluster
+            else:
+                return None
+
+            if isinstance(c, int):
+                return c
+            return c.cluster_id
+
+        def is_conflicting(ep_id):
+            # Tuya cluster never conflicts (we add multiple attributes to it)
+            if cluster_id == TUYA_CLUSTER_ID:
+                return False
+
+            # Collect all cluster IDs already on this endpoint
+            ep_clusters = [
+                get_cluster_id(m)
+                for m in self.adds_metadata
+                if m.endpoint_id == ep_id
+            ]
+            ep_clusters += [
+                get_cluster_id(m)
+                for m in self.replaces_metadata
+                if m.add.endpoint_id == ep_id
+            ]
+
+            # Same cluster ID is a conflict
+            if cluster_id in ep_clusters:
+                return True
+
+            # Check for attribute + unit conflicts (sensors)
+            if attribute_name and unit:
+                for meta in self.entity_metadata:
+                    if (
+                        meta.endpoint_id == ep_id
+                        and getattr(meta, "attribute_name", None) == attribute_name
+                        and getattr(meta, "unit", None) == unit
+                    ):
+                        return True
+
+            return False
+
+        current_endpoint_id = endpoint_id
+        while is_conflicting(current_endpoint_id):
+            current_endpoint_id += 1
+
+        if current_endpoint_id != endpoint_id and not any(
+            m.endpoint_id == current_endpoint_id for m in self.adds_endpoint_metadata
+        ):
+            self.adds_endpoint(current_endpoint_id)
+
+        return current_endpoint_id
+
+    def _tuya_functional_sensor(
         self,
         dp_id: int,
-        power_cfg: PowerConfiguration,
-        scale: float,
-        endpoint_id: int = 1,
+        cluster: TuyaLocalCluster,
+        attribute_name: str,
+        converter: Callable[[Any], Any] | None = None,
+        endpoint_id: int | None = None,
+        **kwargs: Any,
     ) -> Self:
-        """Add a Tuya Battery Power Configuration."""
+        """Add a Tuya functional sensor."""
+        if endpoint_id is None:
+            meta = _TUYA_CLUSTER_METADATA.get(cluster.cluster_id, {})
+            unit = kwargs.get("unit") or meta.get("unit")
+            endpoint_id = self._get_auto_endpoint_id(
+                cluster.cluster_id, 1, attribute_name, unit
+            )
+
         self.tuya_dp(
             dp_id,
-            power_cfg.ep_attribute,
-            PowerConfiguration.AttributeDefs.battery_percentage_remaining.name,
-            converter=lambda x: x * scale,
+            cluster.ep_attribute,
+            attribute_name,
+            converter=converter,
             endpoint_id=endpoint_id,
         )
-        self.adds(power_cfg, endpoint_id=endpoint_id)
+        self.adds(cluster, endpoint_id=endpoint_id)
+
+        # Apply metadata and functional cluster ID
+        sensor_kwargs = {"type": t.uint16_t}
+        sensor_kwargs.update(kwargs)
+
+        self.tuya_sensor(
+            dp_id=dp_id,
+            attribute_name=attribute_name,
+            endpoint_id=endpoint_id,
+            cluster_id=cluster.cluster_id,
+            **sensor_kwargs,
+        )
         return self
 
     def tuya_battery(
@@ -232,32 +416,31 @@ class TuyaQuirkBuilder(QuirkBuilder):
         battery_qty: int | None = 2,
         battery_voltage: int | None = None,
         scale: float = 2,
-        endpoint_id: int = 1,
+        endpoint_id: int | None = None,
     ) -> Self:
         """Add a Tuya Battery Power Configuration."""
+        if power_cfg is None:
+            if not battery_voltage and (battery_type and battery_qty):
+                battery_voltage = BATTERY_VOLTAGES.get(battery_type)
 
-        if power_cfg:
-            return self._tuya_battery(
-                dp_id=dp_id, power_cfg=power_cfg, scale=scale, endpoint_id=endpoint_id
-            )
+            class TuyaPowerConfigurationClusterBattery(TuyaPowerConfigurationCluster):
+                """PowerConfiguration cluster for Tuya devices."""
 
-        if not battery_voltage and (battery_type and battery_qty):
-            battery_voltage = BATTERY_VOLTAGES.get(battery_type)
+                _CONSTANT_ATTRIBUTES = {
+                    PowerConfiguration.AttributeDefs.battery_size.id: battery_type,
+                    PowerConfiguration.AttributeDefs.battery_rated_voltage.id: battery_voltage,
+                    PowerConfiguration.AttributeDefs.battery_quantity.id: battery_qty,
+                }
 
-        class TuyaPowerConfigurationClusterBattery(TuyaPowerConfigurationCluster):
-            """PowerConfiguration cluster for Tuya devices."""
+            power_cfg = TuyaPowerConfigurationClusterBattery
 
-            _CONSTANT_ATTRIBUTES = {
-                PowerConfiguration.AttributeDefs.battery_size.id: battery_type,
-                PowerConfiguration.AttributeDefs.battery_rated_voltage.id: battery_voltage,
-                PowerConfiguration.AttributeDefs.battery_quantity.id: battery_qty,
-            }
-
-        return self._tuya_battery(
+        return self._tuya_functional_sensor(
             dp_id=dp_id,
-            power_cfg=TuyaPowerConfigurationClusterBattery,
-            scale=scale,
+            cluster=power_cfg,
+            attribute_name=PowerConfiguration.AttributeDefs.battery_percentage_remaining.name,
+            converter=lambda x: x * scale,
             endpoint_id=endpoint_id,
+            type=t.uint8_t,
         )
 
     def tuya_illuminance(
@@ -267,20 +450,20 @@ class TuyaQuirkBuilder(QuirkBuilder):
         converter: Callable[[Any], Any] | None = (
             lambda x: 10000 * math.log10(x) + 1 if x != 0 else 0
         ),
-        endpoint_id: int = 1,
+        endpoint_id: int | None = None,
+        **kwargs: Any,
     ) -> Self:
         """Add a Tuya Illuminance Configuration."""
-        self.tuya_dp(
-            dp_id,
-            illuminance_cfg.ep_attribute,
-            IlluminanceMeasurement.AttributeDefs.measured_value.name,
+        return self._tuya_functional_sensor(
+            dp_id=dp_id,
+            cluster=illuminance_cfg,
+            attribute_name=IlluminanceMeasurement.AttributeDefs.measured_value.name,
             converter=converter,
             endpoint_id=endpoint_id,
+            **kwargs,
         )
-        self.adds(illuminance_cfg, endpoint_id=endpoint_id)
-        return self
 
-    def tuya_contact(self, dp_id: int, endpoint_id: int = 1) -> Self:
+    def tuya_contact(self, dp_id: int, endpoint_id: int | None = None) -> Self:
         """Add a Tuya IAS contact sensor."""
         self.tuya_ias(
             dp_id=dp_id,
@@ -295,36 +478,36 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         co2_cfg: TuyaLocalCluster = TuyaCO2Concentration,
         scale: float = 1e-6,
-        endpoint_id: int = 1,
+        endpoint_id: int | None = None,
+        **kwargs: Any,
     ) -> Self:
         """Add a Tuya CO2 Configuration."""
-        self.tuya_dp(
-            dp_id,
-            co2_cfg.ep_attribute,
-            CarbonDioxideConcentration.AttributeDefs.measured_value.name,
+        return self._tuya_functional_sensor(
+            dp_id=dp_id,
+            cluster=co2_cfg,
+            attribute_name=CarbonDioxideConcentration.AttributeDefs.measured_value.name,
             converter=lambda x: x * scale,
             endpoint_id=endpoint_id,
+            **kwargs,
         )
-        self.adds(co2_cfg, endpoint_id=endpoint_id)
-        return self
 
     def tuya_electrical_conductivity(
         self,
         dp_id: int,
         ec_cfg: TuyaLocalCluster = TuyaElectricalConductivity,
         scale: float = 1,
-        endpoint_id: int = 1,
+        endpoint_id: int | None = None,
+        **kwargs: Any,
     ) -> Self:
         """Add a Tuya Electrical Conductivity Configuration."""
-        self.tuya_dp(
-            dp_id,
-            ec_cfg.ep_attribute,
-            ElectricalConductivity.AttributeDefs.measured_value.name,
+        return self._tuya_functional_sensor(
+            dp_id=dp_id,
+            cluster=ec_cfg,
+            attribute_name=ElectricalConductivity.AttributeDefs.measured_value.name,
             converter=lambda x: x * scale,
             endpoint_id=endpoint_id,
+            **kwargs,
         )
-        self.adds(ec_cfg, endpoint_id=endpoint_id)
-        return self
 
     def tuya_formaldehyde(
         self,
@@ -335,38 +518,38 @@ class TuyaQuirkBuilder(QuirkBuilder):
             ((MOL_VOL_AIR_NTP * x) / TuyaFormaldehydeConcentration.MOLECULAR_MASS), 2
         )
         * 1e-6,
-        endpoint_id: int = 1,
+        endpoint_id: int | None = None,
+        **kwargs: Any,
     ) -> Self:
         """Add a Tuya Formaldehyde Configuration."""
-        self.tuya_dp(
-            dp_id,
-            form_cfg.ep_attribute,
-            FormaldehydeConcentration.AttributeDefs.measured_value.name,
+        return self._tuya_functional_sensor(
+            dp_id=dp_id,
+            cluster=form_cfg,
+            attribute_name=FormaldehydeConcentration.AttributeDefs.measured_value.name,
             converter=converter,
             endpoint_id=endpoint_id,
+            **kwargs,
         )
-        self.adds(form_cfg, endpoint_id=endpoint_id)
-        return self
 
     def tuya_pm25(
         self,
         dp_id: int,
         pm25_cfg: TuyaLocalCluster = TuyaPM25Concentration,
         scale: float = 1,
-        endpoint_id: int = 1,
+        endpoint_id: int | None = None,
+        **kwargs: Any,
     ) -> Self:
         """Add a Tuya PM25 Configuration."""
-        self.tuya_dp(
-            dp_id,
-            pm25_cfg.ep_attribute,
-            PM25.AttributeDefs.measured_value.name,
+        return self._tuya_functional_sensor(
+            dp_id=dp_id,
+            cluster=pm25_cfg,
+            attribute_name=PM25.AttributeDefs.measured_value.name,
             converter=lambda x: x * scale,
             endpoint_id=endpoint_id,
+            **kwargs,
         )
-        self.adds(pm25_cfg, endpoint_id=endpoint_id)
-        return self
 
-    def tuya_gas(self, dp_id: int, endpoint_id: int = 1) -> Self:
+    def tuya_gas(self, dp_id: int, endpoint_id: int | None = None) -> Self:
         """Add a Tuya IAS gas sensor."""
         self.tuya_ias(
             dp_id=dp_id,
@@ -376,7 +559,7 @@ class TuyaQuirkBuilder(QuirkBuilder):
         )
         return self
 
-    def tuya_smoke(self, dp_id: int, endpoint_id: int = 1) -> Self:
+    def tuya_smoke(self, dp_id: int, endpoint_id: int | None = None) -> Self:
         """Add a Tuya IAS smoke/fire sensor."""
         self.tuya_ias(
             dp_id=dp_id,
@@ -391,9 +574,12 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         ias_cfg: TuyaLocalCluster,
         converter: Callable[[Any], Any] | None = None,
-        endpoint_id: int = 1,
+        endpoint_id: int | None = None,
     ) -> Self:
         """Add a Tuya IAS Configuration."""
+        if endpoint_id is None:
+            endpoint_id = self._get_auto_endpoint_id(ias_cfg.cluster_id, 1)
+
         self.tuya_dp(
             dp_id,
             ias_cfg.ep_attribute,
@@ -409,26 +595,30 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         metering_cfg: TuyaLocalCluster = TuyaValveWaterConsumedNoInstDemand,
         scale: float = 1,
-        endpoint_id: int = 1,
+        endpoint_id: int | None = None,
+        **kwargs: Any,
     ) -> Self:
         """Add a Tuya Metering Configuration."""
-        self.tuya_dp(
-            dp_id,
-            metering_cfg.ep_attribute,
+        return self._tuya_functional_sensor(
+            dp_id=dp_id,
+            cluster=metering_cfg,
             attribute_name="current_summ_delivered",
             converter=lambda x: x * scale,
             endpoint_id=endpoint_id,
+            type=t.uint32_t,
+            **kwargs,
         )
-        self.adds(metering_cfg, endpoint_id=endpoint_id)
-        return self
 
     def tuya_onoff(
         self,
         dp_id: int,
         onoff_cfg: TuyaLocalCluster = TuyaOnOffNM,
-        endpoint_id: int = 1,
+        endpoint_id: int | None = None,
     ) -> Self:
         """Add a Tuya OnOff Configuration."""
+        if endpoint_id is None:
+            endpoint_id = self._get_auto_endpoint_id(onoff_cfg.cluster_id, 1)
+
         self.tuya_dp(
             dp_id,
             onoff_cfg.ep_attribute,
@@ -443,56 +633,56 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         rh_cfg: TuyaLocalCluster = TuyaRelativeHumidity,
         scale: float = 100,
-        endpoint_id: int = 1,
+        endpoint_id: int | None = None,
+        **kwargs: Any,
     ) -> Self:
         """Add a Tuya Relative Humidity Configuration."""
-        self.tuya_dp(
-            dp_id,
-            rh_cfg.ep_attribute,
-            "measured_value",
+        return self._tuya_functional_sensor(
+            dp_id=dp_id,
+            cluster=rh_cfg,
+            attribute_name="measured_value",
             converter=lambda x: x * scale,
             endpoint_id=endpoint_id,
+            **kwargs,
         )
-        self.adds(rh_cfg, endpoint_id=endpoint_id)
-        return self
 
     def tuya_soil_moisture(
         self,
         dp_id: int,
         soil_cfg: TuyaLocalCluster = TuyaSoilMoisture,
         scale: float = 100,
-        endpoint_id: int = 1,
+        endpoint_id: int | None = None,
+        **kwargs: Any,
     ) -> Self:
         """Add a Tuya Soil Moisture Configuration."""
-        self.tuya_dp(
-            dp_id,
-            soil_cfg.ep_attribute,
-            "measured_value",
+        return self._tuya_functional_sensor(
+            dp_id=dp_id,
+            cluster=soil_cfg,
+            attribute_name="measured_value",
             converter=lambda x: x * scale,
             endpoint_id=endpoint_id,
+            **kwargs,
         )
-        self.adds(soil_cfg, endpoint_id=endpoint_id)
-        return self
 
     def tuya_temperature(
         self,
         dp_id: int,
         temp_cfg: TuyaLocalCluster = TuyaTemperatureMeasurement,
         scale: float = 100,
-        endpoint_id: int = 1,
+        endpoint_id: int | None = None,
+        **kwargs: Any,
     ) -> Self:
         """Add a Tuya Temperature Configuration."""
-        self.tuya_dp(
-            dp_id,
-            temp_cfg.ep_attribute,
-            "measured_value",
+        return self._tuya_functional_sensor(
+            dp_id=dp_id,
+            cluster=temp_cfg,
+            attribute_name="measured_value",
             converter=lambda x: x * scale,
             endpoint_id=endpoint_id,
+            **kwargs,
         )
-        self.adds(temp_cfg, endpoint_id=endpoint_id)
-        return self
 
-    def tuya_vibration(self, dp_id: int, endpoint_id: int = 1) -> Self:
+    def tuya_vibration(self, dp_id: int, endpoint_id: int | None = None) -> Self:
         """Add a Tuya IAS vibration sensor."""
         self.tuya_ias(
             dp_id=dp_id,
@@ -507,18 +697,18 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_id: int,
         voc_cfg: TuyaLocalCluster = TuyaAirQualityVOC,
         scale: float = 1e-6,
-        endpoint_id: int = 1,
+        endpoint_id: int | None = None,
+        **kwargs: Any,
     ) -> Self:
         """Add a Tuya VOC Configuration."""
-        self.tuya_dp(
-            dp_id,
-            voc_cfg.ep_attribute,
-            TuyaAirQualityVOC.AttributeDefs.measured_value.name,
+        return self._tuya_functional_sensor(
+            dp_id=dp_id,
+            cluster=voc_cfg,
+            attribute_name=TuyaAirQualityVOC.AttributeDefs.measured_value.name,
             converter=lambda x: x * scale,
             endpoint_id=endpoint_id,
+            **kwargs,
         )
-        self.adds(voc_cfg, endpoint_id=endpoint_id)
-        return self
 
     def tuya_attribute(
         self,
@@ -811,9 +1001,9 @@ class TuyaQuirkBuilder(QuirkBuilder):
         type: type,
         converter: Callable[[Any], Any] | None = None,
         dp_converter: Callable[[Any], Any] | None = None,
-        endpoint_id: int = 1,
+        endpoint_id: int | None = None,
         divisor: int = 1,
-        multiplier: int = 1,
+        multiplier: int | None = None,
         entity_type: EntityType = EntityType.STANDARD,
         device_class: SensorDeviceClass | None = None,
         state_class: SensorStateClass | None = None,
@@ -823,25 +1013,49 @@ class TuyaQuirkBuilder(QuirkBuilder):
         translation_key: str | None = None,
         fallback_name: str | None = None,
         *,
+        cluster_id: int = TUYA_CLUSTER_ID,
         translation_placeholders: dict[str, str] | None = None,
     ) -> Self:
         """Add an EntityMetadata containing ZCLSensorMetadata and return self.
 
         This method allows exposing a sensor entity in Home Assistant.
         """
+        # Pull default metadata from mapping if available
+        meta = _TUYA_CLUSTER_METADATA.get(cluster_id, {})
+        if device_class is None:
+            device_class = meta.get("device_class")
+        if state_class is None:
+            state_class = meta.get("state_class")
+        if unit is None:
+            unit = meta.get("unit")
+        if multiplier is None:
+            multiplier = meta.get("multiplier", 1)
+        if translation_key is None:
+            translation_key = meta.get("translation_key")
+        if fallback_name is None:
+            fallback_name = meta.get("fallback_name")
 
-        self.tuya_dp_attribute(
-            dp_id=dp_id,
-            attribute_name=attribute_name,
-            type=type,
-            converter=converter,
-            dp_converter=dp_converter,
-            access=foundation.ZCLAttributeAccess.Read
-            | foundation.ZCLAttributeAccess.Report,
-        )
+        if endpoint_id is None:
+            endpoint_id = self._get_auto_endpoint_id(
+                cluster_id, 1, attribute_name, unit
+            )
+
+        # If it's a sensor on the Tuya cluster, we need to add the attribute to it.
+        # Otherwise, we assume the functional cluster already has it.
+        if cluster_id == TUYA_CLUSTER_ID:
+            self.tuya_dp_attribute(
+                dp_id=dp_id,
+                attribute_name=attribute_name,
+                type=type,
+                converter=converter,
+                dp_converter=dp_converter,
+                access=foundation.ZCLAttributeAccess.Read
+                | foundation.ZCLAttributeAccess.Report,
+            )
+
         self.sensor(
             attribute_name=attribute_name,
-            cluster_id=TUYA_CLUSTER_ID,
+            cluster_id=cluster_id,
             endpoint_id=endpoint_id,
             divisor=divisor,
             multiplier=multiplier,
