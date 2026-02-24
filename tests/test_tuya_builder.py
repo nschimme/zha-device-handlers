@@ -573,6 +573,7 @@ async def test_tuya_quirk_builder_endpoint_id(device_mock):
         TuyaQuirkBuilder(device_mock.manufacturer, device_mock.model, registry=registry)
         .adds_endpoint(2)
         .tuya_humidity(dp_id=1, endpoint_id=2)
+        .tuya_soil_moisture(dp_id=2)
         .skip_configuration()
         .add_to_registry()
     )
@@ -583,3 +584,6 @@ async def test_tuya_quirk_builder_endpoint_id(device_mock):
 
     assert not hasattr(quirked.endpoints[1], "humidity")
     assert hasattr(quirked.endpoints[2], "humidity")
+
+    assert hasattr(quirked.endpoints[1], "soil_moisture")
+    assert not hasattr(quirked.endpoints[2], "soil_moisture")
