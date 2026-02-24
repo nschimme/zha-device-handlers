@@ -2019,23 +2019,28 @@ async def test_ts601_door_sensor(
             )
         )
 
-    cluster = getattr(device.endpoints[1], ep_attr)
+    # Determine the endpoint where the attribute is mapped
+    endpoint_id = 1
+    if data[5] == 0x0A:  # DP 10 (Vibration)
+        endpoint_id = 2
+
+    cluster = getattr(device.endpoints[endpoint_id], ep_attr)
     attrs = await cluster.read_attributes(attributes=[attribute])
 
     assert attrs[0].get(attribute) == expected_value
 
 
-async def test_tuya_quirk_builder_endpoint_id(zigpy_device_from_v2_quirk):
-    """Test TuyaQuirkBuilder endpoint_id."""
+async def test_tuya_quirk_builder_auto_endpoint(zigpy_device_from_v2_quirk):
+    """Test TuyaQuirkBuilder automatic endpoint assignment."""
 
     (
         zhaquirks.tuya.builder.TuyaQuirkBuilder("manufacturer", "model")
-        .adds_endpoint(2)
-        .tuya_humidity(dp_id=1, endpoint_id=2)
+        .tuya_humidity(dp_id=1)
+        .tuya_humidity(dp_id=2)
         .add_to_registry()
     )
 
     device: Device = zigpy_device_from_v2_quirk("manufacturer", "model")
 
-    assert not hasattr(device.endpoints[1], "humidity")
+    assert hasattr(device.endpoints[1], "humidity")
     assert hasattr(device.endpoints[2], "humidity")

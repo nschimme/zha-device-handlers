@@ -562,3 +562,60 @@ async def test_tuya_override_mcu_command(
 
     assert tuya_listener.attribute_updates[0][0] == 0xEF0A
     assert tuya_listener.attribute_updates[0][1] == TestEnum.B
+
+async def test_tuya_quirkbuilder_auto_endpoint_conflict(device_mock):
+    """Test TuyaQuirkBuilder automatic endpoint assignment on conflict."""
+
+    registry = DeviceRegistry()
+
+    (
+        TuyaQuirkBuilder(device_mock.manufacturer, device_mock.model, registry=registry)
+        .tuya_temperature(dp_id=1)  # EP 1
+        .tuya_temperature(dp_id=2)  # EP 2
+        .tuya_humidity(dp_id=3)  # EP 1 (no conflict with temperature)
+        .tuya_humidity(dp_id=4)  # EP 2
+        .tuya_onoff(dp_id=5)  # EP 1
+        .tuya_switch(
+            dp_id=6,
+            attribute_name="my_switch",
+            fallback_name="Switch 1",
+            translation_key="switch_1",
+        )  # EP 1
+        .tuya_switch(
+            dp_id=7,
+            attribute_name="my_switch",
+            fallback_name="Switch 2",
+            translation_key="switch_2",
+        )  # EP 2 (conflict on attribute name)
+        .skip_configuration()
+        .add_to_registry(force_add_cluster=True)
+    )
+
+    quirked = registry.get_device(device_mock)
+
+    assert hasattr(quirked.endpoints[1], "temperature")
+    assert hasattr(quirked.endpoints[2], "temperature")
+    assert hasattr(quirked.endpoints[1], "humidity")
+    assert hasattr(quirked.endpoints[2], "humidity")
+    assert hasattr(quirked.endpoints[1], "on_off")
+    # Only endpoint 1 has tuya_manufacturer, which handles all endpoints
+    assert "my_switch" in quirked.endpoints[1].tuya_manufacturer.attributes_by_name
+
+
+async def test_tuya_quirkbuilder_humidity_soil_conflict(device_mock):
+    """Test that tuya_humidity and tuya_soil_moisture get mapped to different endpoints."""
+
+    registry = DeviceRegistry()
+
+    (
+        TuyaQuirkBuilder(device_mock.manufacturer, device_mock.model, registry=registry)
+        .tuya_humidity(dp_id=1)
+        .tuya_soil_moisture(dp_id=2)
+        .skip_configuration()
+        .add_to_registry()
+    )
+
+    quirked = registry.get_device(device_mock)
+
+    assert hasattr(quirked.endpoints[1], "humidity")
+    assert hasattr(quirked.endpoints[2], "soil_moisture")
