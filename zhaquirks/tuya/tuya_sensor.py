@@ -52,6 +52,26 @@ class NoManufTimeTuyaMCUCluster(TuyaMCUCluster):
         )
 
 
+class ZG303ZCluster(TuyaMCUCluster):
+    """Tuya MCU cluster for ZG-303Z sensor."""
+
+    def _dp_2_attr_update(self, datapoint):
+        """Ignore hardware moisture alarm and calculate it from soil moisture and threshold."""
+        if datapoint.dp == 106:
+            return
+
+        super()._dp_2_attr_update(datapoint)
+
+        if datapoint.dp in (3, 110):
+            moisture = self.endpoint.soil_moisture.get("measured_value")
+            threshold = self.get("alarm_soil_moisture_min")
+
+            if moisture is not None and threshold is not None:
+                # Soil moisture is scaled by 100 in SoilMoisture cluster (e.g. 15.00% is 1500)
+                # threshold is 0-100%
+                self.update_attribute("moisture", moisture >= threshold * 100)
+
+
 (
     TuyaQuirkBuilder("_TZE200_bjawzodf", "TS0601")
     .applies_to("_TZE200_zl1kmjqx", "TS0601")
@@ -456,5 +476,5 @@ class NoManufTimeTuyaMCUCluster(TuyaMCUCluster):
     )
     .tuya_enchantment(data_query_spell=True)
     .skip_configuration()
-    .add_to_registry()
+    .add_to_registry(replacement_cluster=ZG303ZCluster)
 )
