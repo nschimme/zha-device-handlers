@@ -179,6 +179,14 @@ class TuyaMotionDetectionMode(t.enum8):
     Only_radar = 0x03
 
 
+class TuyaIlluminanceLevel(t.enum8):
+    """Tuya illuminance level enum."""
+
+    none = 0x00
+    low = 0x01
+    high = 0x02
+
+
 base_tuya_motion = (
     TuyaQuirkBuilder()
     .adds(TuyaOccupancySensing)
@@ -1608,6 +1616,88 @@ base_tuya_motion = (
         unit=UnitOfLength.CENTIMETERS,
         translation_key="breath_detection_max",
         fallback_name="Breath detection max",
+    )
+    .skip_configuration()
+    .add_to_registry()
+)
+
+# Excellux PIRIV-01
+(
+    TuyaQuirkBuilder("Excellux", "PIRIV01")
+    .tuya_dp(
+        dp_id=1,
+        ep_attribute=TuyaOccupancySensing.ep_attribute,
+        attribute_name=OccupancySensing.AttributeDefs.occupancy.name,
+        converter=lambda x: x == 1,
+    )
+    .adds(TuyaOccupancySensing)
+    .tuya_vibration(dp_id=3)
+    .tuya_battery(dp_id=4, scale=2)
+    .tuya_number(
+        dp_id=6,
+        attribute_name="vibration_sensitivity",
+        type=t.uint16_t,
+        min_value=0,
+        max_value=50,
+        step=1,
+        translation_key="vibration_sensitivity",
+        fallback_name="Vibration sensitivity",
+    )
+    .tuya_illuminance(dp_id=20)
+    .tuya_number(
+        dp_id=101,
+        attribute_name="sampling_interval",
+        type=t.uint16_t,
+        unit=UnitOfTime.SECONDS,
+        min_value=5,
+        max_value=1200,
+        step=5,
+        translation_key="sampling_interval",
+        fallback_name="Sampling interval",
+    )
+    .tuya_number(
+        dp_id=104,
+        attribute_name="illuminance_v0",
+        type=t.uint16_t,
+        device_class=SensorDeviceClass.ILLUMINANCE,
+        unit=LIGHT_LUX,
+        min_value=0,
+        max_value=10000,
+        step=1,
+        translation_key="illuminance_v0",
+        fallback_name="Illuminance v0 threshold",
+    )
+    .tuya_number(
+        dp_id=105,
+        attribute_name="illuminance_v1",
+        type=t.uint16_t,
+        device_class=SensorDeviceClass.ILLUMINANCE,
+        unit=LIGHT_LUX,
+        min_value=0,
+        max_value=10000,
+        step=1,
+        translation_key="illuminance_v1",
+        fallback_name="Illuminance v1 threshold",
+    )
+    .tuya_number(
+        dp_id=106,
+        attribute_name="illuminance_calibration",
+        type=t.int16s,
+        unit=LIGHT_LUX,
+        min_value=-1000,
+        max_value=1000,
+        step=1,
+        translation_key="illuminance_calibration",
+        fallback_name="Illuminance calibration",
+    )
+    .tuya_enum(
+        dp_id=107,
+        attribute_name="illuminance_warning",
+        enum_class=TuyaIlluminanceLevel,
+        entity_platform=EntityPlatform.SENSOR,
+        entity_type=EntityType.DIAGNOSTIC,
+        translation_key="illuminance_warning",
+        fallback_name="Illuminance warning",
     )
     .skip_configuration()
     .add_to_registry()
