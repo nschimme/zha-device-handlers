@@ -8,50 +8,11 @@ from zigpy.quirks.v2.homeassistant import LIGHT_LUX, UnitOfLength, UnitOfTime
 from zigpy.quirks.v2.homeassistant.binary_sensor import BinarySensorDeviceClass
 from zigpy.quirks.v2.homeassistant.sensor import SensorDeviceClass, SensorStateClass
 import zigpy.types as t
-from zigpy.zcl.clusters.measurement import OccupancySensing
 from zigpy.zcl.clusters.security import IasZone
 
 from zhaquirks import MotionWithReset
-from zhaquirks.tuya import TuyaLocalCluster, TuyaPowerConfigurationCluster2AAA
+from zhaquirks.tuya import TuyaPowerConfigurationCluster2AAA
 from zhaquirks.tuya.builder import TuyaQuirkBuilder
-
-
-class TuyaOccupancySensing(OccupancySensing, TuyaLocalCluster):
-    """Tuya local OccupancySensing cluster."""
-
-
-class TuyaMotionWithReset(IasZone, TuyaLocalCluster):
-    """Tuya local IAS motion cluster with reset."""
-
-    _CONSTANT_ATTRIBUTES = {
-        IasZone.AttributeDefs.zone_type.id: IasZone.ZoneType.Motion_Sensor
-    }
-    reset_s: int = 15
-
-    def __init__(self, *args, **kwargs):
-        """Init."""
-        super().__init__(*args, **kwargs)
-        self._loop = asyncio.get_running_loop()
-        self._timer_handle = None
-
-    def _turn_off(self) -> None:
-        """Reset IAS zone status."""
-        self._timer_handle = None
-        self.debug("%s - Resetting Tuya motion sensor", self.endpoint.device.ieee)
-        self._update_attribute(IasZone.AttributeDefs.zone_status.id, 0)
-
-    def _update_attribute(self, attrid: int | t.uint16_t, value: Any) -> None:
-        """Catch zone status updates and potentially schedule reset."""
-        if (
-            attrid == IasZone.AttributeDefs.zone_status.id
-            and value == IasZone.ZoneStatus.Alarm_1
-        ):
-            self.debug("%s - Received Tuya motion event", self.endpoint.device.ieee)
-            if self._timer_handle:
-                self._timer_handle.cancel()
-            self._timer_handle = self._loop.call_later(self.reset_s, self._turn_off)
-
-        super()._update_attribute(attrid, value)
 
 
 class TuyaSelfCheckResult(t.enum8):
@@ -182,7 +143,7 @@ class TuyaMotionDetectionMode(t.enum8):
 
 base_tuya_motion = (
     TuyaQuirkBuilder()
-    .adds(TuyaOccupancySensing)
+    .tuya_occupancy(dp_id=1)
     .tuya_number(
         dp_id=2,
         attribute_name="move_sensitivity",
@@ -241,11 +202,10 @@ base_tuya_motion = (
     .applies_to("_TZE204_gkfbdvyx", "TS0601")
     .applies_to("_TZE200_ya4ft0w4", "TS0601")
     .applies_to("_TZE204_ya4ft0w4", "TS0601")
-    .tuya_dp(
+    .tuya_occupancy(
         dp_id=1,
-        ep_attribute=TuyaOccupancySensing.ep_attribute,
-        attribute_name=OccupancySensing.AttributeDefs.occupancy.name,
         converter=lambda x: True if x in (1, 2) else False,
+        overwrite=True,
     )
     # 2, 3, 4, and 9 from base
     .tuya_switch(
@@ -300,12 +260,7 @@ base_tuya_motion = (
     .applies_to("_TZE204_xsm7l9xa", "TS0601")  # Added from z2m, not present prior
     .applies_to("_TZE200_sgpeacqp", "TS0601")  # Added from z2m, not present prior
     .applies_to("_TZE204_fwondbzy", "TS0601")  # Added from z2m, not present prior
-    .tuya_dp(
-        dp_id=1,
-        ep_attribute=TuyaOccupancySensing.ep_attribute,
-        attribute_name=OccupancySensing.AttributeDefs.occupancy.name,
-        converter=lambda x: x == 1,
-    )
+    .tuya_occupancy(dp_id=1, overwrite=True)
     # 2, 3, 4, and 9 from base
     .tuya_enum(
         dp_id=6,  # z2m lists as not working, yet exposes
@@ -344,12 +299,7 @@ base_tuya_motion = (
     base_tuya_motion.clone()
     .applies_to("_TZE204_qasjif9e", "TS0601")
     .applies_to("_TZE204_ztqnh5cg", "TS0601")
-    .tuya_dp(
-        dp_id=1,
-        ep_attribute=TuyaOccupancySensing.ep_attribute,
-        attribute_name=OccupancySensing.AttributeDefs.occupancy.name,
-        converter=lambda x: x == 1,
-    )
+    .tuya_occupancy(dp_id=1, overwrite=True)
     # 2, 3, 4, and 9 from base
     .tuya_number(
         dp_id=101,
@@ -387,12 +337,7 @@ base_tuya_motion = (
     base_tuya_motion.clone()
     .applies_to("_TZE204_laokfqwu", "TS0601")
     .applies_to("_TZE200_clrdrnya", "TS0601")
-    .tuya_dp(
-        dp_id=1,
-        ep_attribute=TuyaOccupancySensing.ep_attribute,
-        attribute_name=OccupancySensing.AttributeDefs.occupancy.name,
-        converter=lambda x: x == 1,
-    )
+    .tuya_occupancy(dp_id=1, overwrite=True)
     # 2, 3, 4, and 9 from base
     .tuya_number(
         dp_id=104,
@@ -438,9 +383,8 @@ base_tuya_motion = (
 (
     TuyaQuirkBuilder("_TYST11_i5j6ifxj", "5j6ifxj")
     .applies_to("_TYST11_7hfcudw5", "hfcudw5")
-    .tuya_ias(
+    .tuya_motion_with_reset(
         dp_id=3,
-        ias_cfg=TuyaMotionWithReset,
         converter=lambda x: IasZone.ZoneStatus.Alarm_1 if x == 2 else 0,
     )
     .skip_configuration()
@@ -452,13 +396,7 @@ base_tuya_motion = (
 (
     TuyaQuirkBuilder("_TZE200_7hfcudw5", "TS0601")
     .applies_to("_TZE200_ppuj1vem", "TS0601")
-    .tuya_dp(
-        dp_id=101,
-        ep_attribute=TuyaOccupancySensing.ep_attribute,
-        attribute_name=OccupancySensing.AttributeDefs.occupancy.name,
-        converter=lambda x: x == 1,
-    )
-    .adds(TuyaOccupancySensing)
+    .tuya_occupancy(dp_id=101)
     .tuya_temperature(dp_id=104, scale=10)
     .tuya_humidity(dp_id=105)
     .skip_configuration()
@@ -468,13 +406,10 @@ base_tuya_motion = (
 
 (
     TuyaQuirkBuilder("_TZE204_uxllnywp", "TS0601")
-    .tuya_dp(
+    .tuya_occupancy(
         dp_id=1,
-        ep_attribute=TuyaOccupancySensing.ep_attribute,
-        attribute_name=OccupancySensing.AttributeDefs.occupancy.name,
         converter=lambda x: x == 4,
     )
-    .adds(TuyaOccupancySensing)
     .tuya_sensor(
         dp_id=101,
         attribute_name="target_distance",
@@ -547,13 +482,10 @@ base_tuya_motion = (
 
 (
     TuyaQuirkBuilder("_TZE204_dapwryy7", "TS0601")
-    .tuya_dp(
+    .tuya_occupancy(
         dp_id=1,
-        ep_attribute=TuyaOccupancySensing.ep_attribute,
-        attribute_name=OccupancySensing.AttributeDefs.occupancy.name,
         converter=lambda x: x != TuyaPresenceState.Unoccupied,
     )
-    .adds(TuyaOccupancySensing)
     .tuya_number(
         dp_id=101,
         attribute_name="target_distance",
@@ -702,12 +634,7 @@ base_tuya_motion = (
     .applies_to("_TZE204_pfayrzcw", "TS0601")
     .applies_to("_TZE284_4qznlkbu", "TS0601")
     .applies_to("_TZE200_sbyx0lm6", "TS0601")
-    .tuya_dp(
-        dp_id=1,
-        ep_attribute=TuyaOccupancySensing.ep_attribute,
-        attribute_name=OccupancySensing.AttributeDefs.occupancy.name,
-        converter=lambda x: x == 1,
-    )
+    .tuya_occupancy(dp_id=1, overwrite=True)
     # 2, 3, 4, and 9 from base, z2m has slightly different values limits and names
     # 6 is equipment_status, z2m doesn't expose
     .tuya_number(
@@ -829,13 +756,7 @@ base_tuya_motion = (
 
 (
     TuyaQuirkBuilder("_TZE204_muvkrjr5", "TS0601")
-    .tuya_dp(
-        dp_id=1,
-        ep_attribute=TuyaOccupancySensing.ep_attribute,
-        attribute_name=OccupancySensing.AttributeDefs.occupancy.name,
-        converter=lambda x: x == 1,
-    )
-    .adds(TuyaOccupancySensing)
+    .tuya_occupancy(dp_id=1)
     .tuya_number(
         dp_id=13,
         attribute_name="detection_distance_max",
@@ -897,13 +818,7 @@ base_tuya_motion = (
 
 (
     TuyaQuirkBuilder("_TZE204_kyhbrfyl", "TS0601")
-    .tuya_dp(
-        dp_id=1,
-        ep_attribute=TuyaOccupancySensing.ep_attribute,
-        attribute_name=OccupancySensing.AttributeDefs.occupancy.name,
-        converter=lambda x: x == 1,
-    )
-    .adds(TuyaOccupancySensing)
+    .tuya_occupancy(dp_id=1)
     .tuya_enum(
         dp_id=11,
         attribute_name="human_motion_state",
@@ -976,14 +891,8 @@ base_tuya_motion = (
 # Heimen HS80S-TY
 (
     TuyaQuirkBuilder("_TZ6210_duv6fhwt", "TS0601")
-    .tuya_dp(
-        dp_id=1,
-        ep_attribute=TuyaOccupancySensing.ep_attribute,
-        attribute_name=OccupancySensing.AttributeDefs.occupancy.name,
-        converter=lambda x: x == 1,
-    )
+    .tuya_occupancy(dp_id=1)
     .tuya_illuminance(dp_id=101)
-    .adds(TuyaOccupancySensing)
     .tuya_switch(
         dp_id=102,
         attribute_name="find_switch",
@@ -1028,13 +937,7 @@ base_tuya_motion = (
 # NEO NAS-PS10B2
 (
     TuyaQuirkBuilder("_TZE204_1youk3hj", "TS0601")
-    .tuya_dp(
-        dp_id=1,
-        ep_attribute=TuyaOccupancySensing.ep_attribute,
-        attribute_name=OccupancySensing.AttributeDefs.occupancy.name,
-        converter=lambda x: x == 1,
-    )
-    .adds(TuyaOccupancySensing)
+    .tuya_occupancy(dp_id=1)
     .tuya_enum(
         dp_id=11,
         attribute_name="human_motion_state",
@@ -1147,13 +1050,10 @@ base_tuya_motion = (
     .applies_to("_TZE200_1ibpyhdc", "TS0601")
     .applies_to("_TZE200_bh3n6gk8", "TS0601")
     .applies_to("_TZE200_ttcovulf", "TS0601")
-    .tuya_dp(
+    .tuya_occupancy(
         dp_id=1,
-        ep_attribute=TuyaOccupancySensing.ep_attribute,
-        attribute_name=OccupancySensing.AttributeDefs.occupancy.name,
         converter=lambda x: x == 0,
     )
-    .adds(TuyaOccupancySensing)
     .tuya_battery(dp_id=4)
     .tuya_enum(
         dp_id=9,
@@ -1192,13 +1092,7 @@ base_tuya_motion = (
     TuyaQuirkBuilder("_TZE204_sxm7l9xa", "TS0601")
     .applies_to("_TZE204_e5m9c5hl", "TS0601")
     .tuya_illuminance(dp_id=104)
-    .tuya_dp(
-        dp_id=105,
-        ep_attribute=TuyaOccupancySensing.ep_attribute,
-        attribute_name=OccupancySensing.AttributeDefs.occupancy.name,
-        converter=lambda x: x == 1,
-    )
-    .adds(TuyaOccupancySensing)
+    .tuya_occupancy(dp_id=105)
     .tuya_number(
         dp_id=106,
         attribute_name="radar_sensitivity",
@@ -1277,13 +1171,7 @@ base_tuya_motion = (
 # Tuya PIR Motion Sensor ZM-35ZH-Q occupancy sensor
 (
     TuyaQuirkBuilder("_TZE200_gjldowol", "TS0601")
-    .tuya_dp(
-        dp_id=1,
-        ep_attribute=TuyaOccupancySensing.ep_attribute,
-        attribute_name=OccupancySensing.AttributeDefs.occupancy.name,
-        converter=lambda x: x == 1,
-    )
-    .adds(TuyaOccupancySensing)
+    .tuya_occupancy(dp_id=1)
     .tuya_battery(dp_id=4)
     .tuya_enum(
         dp_id=9,
@@ -1327,13 +1215,7 @@ base_tuya_motion = (
     TuyaQuirkBuilder("_TZE200_2aaelwxk", "TS0225")
     .applies_to("_TZE200_crq3r3la", "CK-BL702-MWS-01(7016)")
     .applies_to("HOBEIAN", "CK-BL702-MWS-01(7016)")
-    .tuya_dp(
-        dp_id=1,
-        ep_attribute=TuyaOccupancySensing.ep_attribute,
-        attribute_name=OccupancySensing.AttributeDefs.occupancy.name,
-        converter=lambda x: x == 1,
-    )
-    .adds(TuyaOccupancySensing)
+    .tuya_occupancy(dp_id=1)
     .tuya_number(
         dp_id=2,
         attribute_name="large_motion_detection_sensitivity",
@@ -1441,13 +1323,7 @@ base_tuya_motion = (
     TuyaQuirkBuilder("_TZE200_2aaelwxk", "TS0601")
     .applies_to("_TZE200_kb5noeto", "TS0601")
     .applies_to("HOBEIAN", "ZG-204ZM")
-    .tuya_dp(
-        dp_id=1,
-        ep_attribute=TuyaOccupancySensing.ep_attribute,
-        attribute_name=OccupancySensing.AttributeDefs.occupancy.name,
-        converter=lambda x: x == 1,
-    )
-    .adds(TuyaOccupancySensing)
+    .tuya_occupancy(dp_id=1)
     .tuya_number(
         dp_id=2,
         attribute_name="static_detection_sensitivity",
@@ -1527,13 +1403,10 @@ base_tuya_motion = (
 (
     TuyaQuirkBuilder("_TZE204_ex3rcdha", "TS0601")
     .tuya_illuminance(dp_id=12)
-    .tuya_dp(
+    .tuya_occupancy(
         dp_id=101,
-        ep_attribute=TuyaOccupancySensing.ep_attribute,
-        attribute_name=OccupancySensing.AttributeDefs.occupancy.name,
         converter=lambda x: x == 0,
     )
-    .adds(TuyaOccupancySensing)
     .tuya_number(
         dp_id=104,
         attribute_name="presence_timeout",

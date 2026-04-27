@@ -1,5 +1,6 @@
 """Tuya QuirkBuilder."""
 
+import asyncio
 from collections.abc import Callable
 from enum import Enum
 import inspect
@@ -23,6 +24,7 @@ from zigpy.zcl.clusters.measurement import (
     ElectricalConductivity,
     FormaldehydeConcentration,
     IlluminanceMeasurement,
+    OccupancySensing,
     RelativeHumidity,
     SoilMoisture,
     TemperatureMeasurement,
@@ -196,6 +198,44 @@ class TuyaIlluminance(IlluminanceMeasurement, TuyaLocalCluster):
     }
 
 
+class TuyaOccupancySensing(OccupancySensing, TuyaLocalCluster):
+    """Tuya local OccupancySensing cluster."""
+
+
+class TuyaMotionWithReset(IasZone, TuyaLocalCluster):
+    """Tuya local IAS motion cluster with reset."""
+
+    _CONSTANT_ATTRIBUTES = {
+        IasZone.AttributeDefs.zone_type.id: IasZone.ZoneType.Motion_Sensor
+    }
+    reset_s: int = 15
+
+    def __init__(self, *args, **kwargs):
+        """Init."""
+        super().__init__(*args, **kwargs)
+        self._loop = asyncio.get_running_loop()
+        self._timer_handle = None
+
+    def _turn_off(self) -> None:
+        """Reset IAS zone status."""
+        self._timer_handle = None
+        self.debug("%s - Resetting Tuya motion sensor", self.endpoint.device.ieee)
+        self._update_attribute(IasZone.AttributeDefs.zone_status.id, 0)
+
+    def _update_attribute(self, attrid: int | t.uint16_t, value: Any) -> None:
+        """Catch zone status updates and potentially schedule reset."""
+        if (
+            attrid == IasZone.AttributeDefs.zone_status.id
+            and value == IasZone.ZoneStatus.Alarm_1
+        ):
+            self.debug("%s - Received Tuya motion event", self.endpoint.device.ieee)
+            if self._timer_handle:
+                self._timer_handle.cancel()
+            self._timer_handle = self._loop.call_later(self.reset_s, self._turn_off)
+
+        super()._update_attribute(attrid, value)
+
+
 class TuyaQuirkBuilder(QuirkBuilder):
     """Tuya QuirkBuilder."""
 
@@ -293,6 +333,48 @@ class TuyaQuirkBuilder(QuirkBuilder):
             dp_id=dp_id,
             ias_cfg=TuyaIasContact,
             converter=lambda x: IasZone.ZoneStatus.Alarm_1 if x != 0 else 0,
+            endpoint_id=endpoint_id,
+        )
+        return self
+
+    def tuya_occupancy(
+        self,
+        dp_id: int,
+        converter: Callable[[Any], Any] | None = lambda x: x == 1,
+        endpoint_id: int = 1,
+        overwrite: bool = False,
+    ) -> Self:
+        """Add a Tuya Occupancy Configuration."""
+        self.tuya_dp(
+            dp_id,
+            TuyaOccupancySensing.ep_attribute,
+            OccupancySensing.AttributeDefs.occupancy.name,
+            converter=converter,
+            endpoint_id=endpoint_id,
+            overwrite=overwrite,
+        )
+        self.adds(TuyaOccupancySensing, endpoint_id=endpoint_id)
+        return self
+
+    def tuya_motion_with_reset(
+        self,
+        dp_id: int,
+        reset_s: int = 15,
+        converter: Callable[[Any], Any]
+        | None = lambda x: IasZone.ZoneStatus.Alarm_1 if x != 0 else 0,
+        endpoint_id: int = 1,
+    ) -> Self:
+        """Add a Tuya IAS motion sensor with reset."""
+
+        class TuyaMotionWithResetCustom(TuyaMotionWithReset):
+            """Tuya local IAS motion cluster with reset."""
+
+        TuyaMotionWithResetCustom.reset_s = reset_s
+
+        self.tuya_ias(
+            dp_id=dp_id,
+            ias_cfg=TuyaMotionWithResetCustom,
+            converter=converter,
             endpoint_id=endpoint_id,
         )
         return self
@@ -602,6 +684,7 @@ class TuyaQuirkBuilder(QuirkBuilder):
         dp_converter: Callable[[Any], Any] | None = None,
         endpoint_id: int | None = None,
         dp_handler: str = "_dp_2_attr_update",
+        overwrite: bool = False,
     ) -> Self:
         """Add Tuya DP Converter."""
 
@@ -617,6 +700,7 @@ class TuyaQuirkBuilder(QuirkBuilder):
             ],
             dp_handler,
             dp_converter,
+            overwrite=overwrite,
         )
         return self
 
@@ -626,10 +710,11 @@ class TuyaQuirkBuilder(QuirkBuilder):
         attribute_mapping: list[DPToAttributeMapping],
         dp_handler: str = "_dp_2_attr_update",
         dp_converter: Callable[[Any], Any] | None = None,
+        overwrite: bool = False,
     ) -> Self:  # fmt: skip
         """Add Tuya DP Converter that maps to multiple attributes."""
 
-        if dp_id in self.tuya_dp_to_attribute:
+        if dp_id in self.tuya_dp_to_attribute and not overwrite:
             raise ValueError(f"DP {dp_id} is already mapped.")
 
         self.tuya_dp_to_attribute.update({dp_id: attribute_mapping})
