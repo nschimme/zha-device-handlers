@@ -8,7 +8,6 @@ from zigpy.zcl.clusters.smartenergy import Metering
 from zhaquirks.tuya import (
     ExternalSwitchType,
     PowerOnState,
-    SwitchBackLight,
     TuyaZBExternalSwitchTypeCluster,
     TuyaZBOnOffAttributeCluster,
 )
@@ -62,8 +61,8 @@ class CustomMetering(Metering, CustomCluster):
 (
     TuyaQuirkBuilder("_TZ3000_ywlexjqc", "TS0001")
     .tuya_enchantment()
-    .replaces(CustomMetering)
-    .replaces(CustomElectricalMeasurement)
+    .removes(Metering.cluster_id)
+    .removes(ElectricalMeasurement.cluster_id)
     .replaces(TuyaZBOnOffAttributeCluster)
     .replaces(TuyaZBExternalSwitchTypeCluster)
     .adds(0xFC11)
@@ -75,24 +74,11 @@ class CustomMetering(Metering, CustomCluster):
         fallback_name="Power-on behavior",
     )
     .enum(
-        TuyaZBOnOffAttributeCluster.AttributeDefs.backlight_mode.name,
-        SwitchBackLight,
-        TuyaZBOnOffAttributeCluster.cluster_id,
-        translation_key="backlight_mode",
-        fallback_name="Backlight mode",
-    )
-    .enum(
         TuyaZBExternalSwitchTypeCluster.AttributeDefs.external_switch_type.name,
         ExternalSwitchType,
         TuyaZBExternalSwitchTypeCluster.cluster_id,
         translation_key="external_switch_type",
         fallback_name="External switch type",
-    )
-    .binary_sensor(
-        TuyaZBOnOffAttributeCluster.AttributeDefs.child_lock.name,
-        TuyaZBOnOffAttributeCluster.cluster_id,
-        translation_key="child_lock",
-        fallback_name="Child lock",
     )
     .add_to_registry()
 )
