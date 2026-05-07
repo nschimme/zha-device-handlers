@@ -5,7 +5,13 @@ from zigpy.quirks.v2 import QuirkBuilder
 from zigpy.zcl.clusters.homeautomation import ElectricalMeasurement
 from zigpy.zcl.clusters.smartenergy import Metering
 
-from zhaquirks.tuya import TuyaZBExternalSwitchTypeCluster, TuyaZBOnOffAttributeCluster
+from zhaquirks.tuya import (
+    ExternalSwitchType,
+    PowerOnState,
+    TuyaZBExternalSwitchTypeCluster,
+    TuyaZBOnOffAttributeCluster,
+)
+from zhaquirks.tuya.builder import TuyaQuirkBuilder
 
 
 class CustomElectricalMeasurement(ElectricalMeasurement, CustomCluster):
@@ -48,5 +54,31 @@ class CustomMetering(Metering, CustomCluster):
     .replaces(CustomElectricalMeasurement)
     .replaces(TuyaZBOnOffAttributeCluster)
     .replaces(TuyaZBExternalSwitchTypeCluster)
+    .add_to_registry()
+)
+
+
+(
+    TuyaQuirkBuilder("_TZ3000_ywlexjqc", "TS0001")
+    .tuya_enchantment()
+    .removes(Metering.cluster_id)
+    .removes(ElectricalMeasurement.cluster_id)
+    .replaces(TuyaZBOnOffAttributeCluster)
+    .replaces(TuyaZBExternalSwitchTypeCluster)
+    .adds(0xFC11)
+    .enum(
+        TuyaZBOnOffAttributeCluster.AttributeDefs.power_on_state.name,
+        PowerOnState,
+        TuyaZBOnOffAttributeCluster.cluster_id,
+        translation_key="power_on_behavior",
+        fallback_name="Power-on behavior",
+    )
+    .enum(
+        TuyaZBExternalSwitchTypeCluster.AttributeDefs.external_switch_type.name,
+        ExternalSwitchType,
+        TuyaZBExternalSwitchTypeCluster.cluster_id,
+        translation_key="external_switch_type",
+        fallback_name="External switch type",
+    )
     .add_to_registry()
 )
