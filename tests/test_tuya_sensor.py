@@ -3,10 +3,14 @@
 import pytest
 from zigpy.zcl import foundation
 from zigpy.zcl.clusters.general import Basic, PowerConfiguration
-from zigpy.zcl.clusters.measurement import RelativeHumidity, TemperatureMeasurement
+from zigpy.zcl.clusters.measurement import (
+    RelativeHumidity,
+    SoilMoisture,
+    TemperatureMeasurement,
+)
 
 import zhaquirks
-from zhaquirks.tuya import TuyaLocalCluster
+from zhaquirks.tuya import TuyaData, TuyaDatapointData, TuyaDPType, TuyaLocalCluster
 from zhaquirks.tuya.mcu import TuyaMCUCluster
 
 # Temp DP 1, Humidity DP 2, Battery DP 3
@@ -178,3 +182,46 @@ def test_valid_attributes(zigpy_device_from_v2_quirk):
     assert {temperature_attr_id} == temperature_cluster._VALID_ATTRIBUTES
     assert {humidity_attr_id} == humidity_cluster._VALID_ATTRIBUTES
     assert {power_attr_id} == power_config_cluster._VALID_ATTRIBUTES
+
+
+async def test_hobeian_zg_303z(zigpy_device_from_v2_quirk):
+    """Test HOBEIAN ZG-303Z quirk."""
+
+    quirked = zigpy_device_from_v2_quirk("HOBEIAN", "ZG-303Z")
+
+    assert quirked.endpoints[1].tuya_manufacturer is not None
+    assert quirked.endpoints[2].soil_moisture is not None
+    assert quirked.endpoints[3].humidity is not None
+    assert quirked.endpoints[1].temperature is not None
+    assert quirked.endpoints[1].power is not None
+
+    ep = quirked.endpoints[1]
+    mcu = ep.tuya_manufacturer
+    assert isinstance(mcu, TuyaMCUCluster)
+
+    # Test soil moisture
+    mcu._dp_2_attr_update(
+        TuyaDatapointData(dp=3, data=TuyaData(value=45)),
+    )
+    assert quirked.endpoints[2].soil_moisture.get("measured_value") == 4500
+
+    # Test temperature
+    mcu._dp_2_attr_update(
+        TuyaDatapointData(dp=5, data=TuyaData(value=25)),
+    )
+    assert quirked.endpoints[1].temperature.get("measured_value") == 250
+
+    # Test battery
+    mcu._dp_2_attr_update(
+        TuyaDatapointData(dp=15, data=TuyaData(value=90)),
+    )
+    assert quirked.endpoints[1].power.get("battery_percentage_remaining") == 90
+
+    # Test humidity
+    mcu._dp_2_attr_update(
+        TuyaDatapointData(dp=109, data=TuyaData(value=60)),
+    )
+    assert quirked.endpoints[3].humidity.get("measured_value") == 6000
+
+    # Test that clusters were correctly removed
+    assert not hasattr(quirked.endpoints[1], "humidity")
