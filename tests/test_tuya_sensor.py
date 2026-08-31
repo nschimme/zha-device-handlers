@@ -178,3 +178,43 @@ def test_valid_attributes(zigpy_device_from_v2_quirk):
     assert {temperature_attr_id} == temperature_cluster._VALID_ATTRIBUTES
     assert {humidity_attr_id} == humidity_cluster._VALID_ATTRIBUTES
     assert {power_attr_id} == power_config_cluster._VALID_ATTRIBUTES
+
+
+async def test_hobeian_zg_303z_sensor(zigpy_device_from_v2_quirk):
+    """Test HOBEIAN ZG-303Z sensor value overwriting bug."""
+
+    quirked = zigpy_device_from_v2_quirk("HOBEIAN", "ZG-303Z")
+    ep = quirked.endpoints[1]
+
+    # ensure clusters are present
+    assert ep.basic is not None
+    assert isinstance(ep.basic, Basic)
+    assert ep.tuya_manufacturer is not None
+    assert isinstance(ep.tuya_manufacturer, TuyaMCUCluster)
+    assert hasattr(ep, "humidity")
+    assert hasattr(ep, "soil_moisture")
+
+    # 1. Send humidity update (dp=2, value=50)
+    # ZCL frame: tsn=1, command=set_data_response
+    # TuyaCommand: status=0, tsn=1, datapoints=[{dp=2, type=value, data=50}]
+    humidity_msg = b"\x09\x01\x02\x00\x01\x02\x02\x00\x04\x00\x00\x00\x32"
+    hdr, data = ep.tuya_manufacturer.deserialize(humidity_msg)
+    ep.tuya_manufacturer.handle_set_data_response(data.data)
+
+    # check that humidity is updated and soil moisture is not
+    assert ep.humidity.get("measured_value") == 5000
+    assert ep.soil_moisture.get("measured_value") is None
+
+    # 2. Send soil moisture update (dp=3, value=30)
+    # ZCL frame: tsn=2, command=set_data_response
+    # TuyaCommand: status=0, tsn=2, datapoints=[{dp=3, type=value, data=30}]
+    soil_msg = b"\x09\x02\x02\x00\x02\x03\x02\x00\x04\x00\x00\x00\x1e"
+    hdr, data = ep.tuya_manufacturer.deserialize(soil_msg)
+    ep.tuya_manufacturer.handle_set_data_response(data.data)
+
+    # check that soil moisture is updated and humidity has not changed
+    assert ep.soil_moisture.get("measured_value") == 3000
+    assert ep.humidity.get("measured_value") == 5000
+
+    # also check the inheritance bug
+    assert not isinstance(ep.soil_moisture, RelativeHumidity)

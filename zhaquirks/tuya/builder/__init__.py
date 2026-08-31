@@ -130,8 +130,33 @@ class TuyaTemperatureMeasurement(TemperatureMeasurement, TuyaLocalCluster):
     """Tuya local TemperatureMeasurement cluster."""
 
 
-class TuyaSoilMoisture(SoilMoisture, TuyaLocalCluster):
-    """Tuya local SoilMoisture cluster with a device RH_MULTIPLIER factor if required."""
+class TuyaSoilMoisture(TuyaLocalCluster):
+    """Tuya local SoilMoisture cluster."""
+
+    cluster_id = SoilMoisture.cluster_id
+    ep_attribute = "soil_moisture"
+
+    class AttributeDefs(BaseAttributeDefs):
+        """Attribute definitions."""
+
+        measured_value = ZCLAttributeDef(
+            id=SoilMoisture.AttributeDefs.measured_value.id,
+            type=t.uint16_t,
+            access="rp",
+            mandatory=True,
+        )
+        min_measured_value = ZCLAttributeDef(
+            id=SoilMoisture.AttributeDefs.min_measured_value.id,
+            type=t.uint16_t,
+            access="rp",
+            mandatory=True,
+        )
+        max_measured_value = ZCLAttributeDef(
+            id=SoilMoisture.AttributeDefs.max_measured_value.id,
+            type=t.uint16_t,
+            access="rp",
+            mandatory=True,
+        )
 
 
 class TuyaValveWaterConsumed(Metering, TuyaLocalCluster):
