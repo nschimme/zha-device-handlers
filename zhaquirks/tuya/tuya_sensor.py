@@ -404,7 +404,9 @@ class TuyaSleepyMCUCluster(TuyaMCUCluster):
     """
 
     RESEND_INTERVAL = 5  # seconds, one wake-up sends several frames
-    MAX_ATTEMPTS = 10
+    MAX_ATTEMPTS = (
+        10  # a datapoint the device never echoes is reported as is after this
+    )
 
     def __init__(self, *args, **kwargs) -> None:
         """Init."""
@@ -420,7 +422,10 @@ class TuyaSleepyMCUCluster(TuyaMCUCluster):
 
         def packet_received_and_resend(*args, **kwargs) -> None:
             packet_received(*args, **kwargs)
-            self._resend_pending()
+            try:
+                self._resend_pending()
+            except Exception:  # noqa: BLE001
+                self.exception("Failed to write unconfirmed datapoints again")
 
         device.packet_received = packet_received_and_resend
 
