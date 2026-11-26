@@ -413,6 +413,17 @@ class TuyaSleepyMCUCluster(TuyaMCUCluster):
         self._pending_attempts: dict[int, int] = {}
         self._last_resend = 0.0
 
+        # The device does not always send datapoints when it wakes up, and any frame
+        # shows that it is listening
+        device = self.endpoint.device
+        packet_received = device.packet_received
+
+        def packet_received_and_resend(*args, **kwargs) -> None:
+            packet_received(*args, **kwargs)
+            self._resend_pending()
+
+        device.packet_received = packet_received_and_resend
+
     def tuya_mcu_command(self, cluster_data) -> None:
         """Remember the written datapoints until the device confirms them."""
         for command in self.from_cluster_data(cluster_data):

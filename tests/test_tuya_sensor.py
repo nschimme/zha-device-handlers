@@ -3,6 +3,8 @@
 from unittest import mock
 
 import pytest
+import zigpy.profiles.zha
+import zigpy.types
 from zigpy.zcl import ClusterType, foundation
 from zigpy.zcl.clusters.general import Basic, PowerConfiguration
 from zigpy.zcl.clusters.measurement import RelativeHumidity, TemperatureMeasurement
@@ -279,3 +281,36 @@ async def test_zg303z_resend_is_limited(zigpy_device_from_v2_quirk):
             await wait_for_zigpy_tasks()
 
     assert command.await_count == cluster.MAX_ATTEMPTS
+
+
+async def test_zg303z_resends_write_after_any_frame_from_the_device(
+    zigpy_device_from_v2_quirk,
+):
+    """The device does not always report datapoints, any frame shows it is awake."""
+    quirked = _hobeian_soil_sensor(zigpy_device_from_v2_quirk)
+    cluster = quirked.endpoints[1].tuya_manufacturer
+
+    with (
+        mock.patch.object(cluster, "command", new=mock.AsyncMock()) as command,
+        mock.patch("zhaquirks.tuya.tuya_sensor.time.monotonic", return_value=1000),
+    ):
+        await cluster.write_attributes({"alarm_soil_moisture_min": 0})
+        await wait_for_zigpy_tasks()
+        assert command.await_count == 1
+
+        # temperature report on the standard cluster
+        quirked.packet_received(
+            zigpy.types.ZigbeePacket(
+                profile_id=zigpy.profiles.zha.PROFILE_ID,
+                cluster_id=TemperatureMeasurement.cluster_id,
+                src_ep=1,
+                dst_ep=1,
+                data=zigpy.types.SerializableBytes(b"\x18\x8c\x0a\x00\x00\x29\x22\x0b"),
+                dst=zigpy.types.AddrModeAddress(
+                    addr_mode=zigpy.types.AddrMode.NWK, address=quirked.nwk
+                ),
+            )
+        )
+        await wait_for_zigpy_tasks()
+
+    assert command.await_count == 2
