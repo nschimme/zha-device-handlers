@@ -1,12 +1,15 @@
 """Tests for Tuya Sensor quirks."""
 
+from unittest import mock
+
 import pytest
-from zigpy.zcl import foundation
+from zigpy.zcl import ClusterType, foundation
 from zigpy.zcl.clusters.general import Basic, PowerConfiguration
 from zigpy.zcl.clusters.measurement import RelativeHumidity, TemperatureMeasurement
 
+from tests.common import wait_for_zigpy_tasks
 import zhaquirks
-from zhaquirks.tuya import TuyaLocalCluster
+from zhaquirks.tuya import TuyaCommand, TuyaData, TuyaDatapointData, TuyaLocalCluster
 from zhaquirks.tuya.mcu import TuyaMCUCluster
 
 # Temp DP 1, Humidity DP 2, Battery DP 3
@@ -178,3 +181,101 @@ def test_valid_attributes(zigpy_device_from_v2_quirk):
     assert {temperature_attr_id} == temperature_cluster._VALID_ATTRIBUTES
     assert {humidity_attr_id} == humidity_cluster._VALID_ATTRIBUTES
     assert {power_attr_id} == power_config_cluster._VALID_ATTRIBUTES
+
+
+def _hobeian_soil_sensor(zigpy_device_from_v2_quirk):
+    """Create the ZG-303Z soil sensor with the clusters of the real device."""
+    return zigpy_device_from_v2_quirk(
+        "_TZE200_npj9bug3",
+        "TS0601",
+        cluster_ids={
+            1: dict.fromkeys(
+                (
+                    Basic.cluster_id,
+                    PowerConfiguration.cluster_id,
+                    TemperatureMeasurement.cluster_id,
+                    RelativeHumidity.cluster_id,
+                    TuyaMCUCluster.cluster_id,
+                ),
+                ClusterType.Server,
+            )
+        },
+    )
+
+
+def _datapoint(dp: int, value: int) -> TuyaCommand:
+    return TuyaCommand(
+        status=0, tsn=1, datapoints=[TuyaDatapointData(dp, TuyaData(value))]
+    )
+
+
+async def test_zg303z_air_humidity_is_not_overwritten_by_soil_moisture(
+    zigpy_device_from_v2_quirk,
+):
+    """The device reports soil moisture in its own 0x0405 cluster on endpoint 1.
+
+    Air humidity (DP 109) must therefore live on another endpoint.
+    """
+    quirked = _hobeian_soil_sensor(zigpy_device_from_v2_quirk)
+
+    assert RelativeHumidity.cluster_id not in quirked.endpoints[1].in_clusters
+
+    quirked.endpoints[1].tuya_manufacturer.handle_get_data(_datapoint(109, 53))
+    quirked.endpoints[1].tuya_manufacturer.handle_get_data(_datapoint(3, 70))
+
+    assert quirked.endpoints[2].humidity.get("measured_value") == 5300
+    assert quirked.endpoints[1].soil_moisture.get("measured_value") == 7000
+
+
+async def test_zg303z_resends_write_the_sleeping_device_missed(
+    zigpy_device_from_v2_quirk,
+):
+    """A write is kept and sent again after the device has been heard."""
+    quirked = _hobeian_soil_sensor(zigpy_device_from_v2_quirk)
+    cluster = quirked.endpoints[1].tuya_manufacturer
+
+    with (
+        mock.patch.object(cluster, "command", new=mock.AsyncMock()) as command,
+        mock.patch("zhaquirks.tuya.tuya_sensor.time.monotonic", return_value=1000),
+    ):
+        await cluster.write_attributes({"alarm_soil_moisture_min": 0})
+        await wait_for_zigpy_tasks()
+        assert command.await_count == 1
+
+        # The device reports something else, and still has the old value
+        cluster.handle_get_data(_datapoint(5, 250))
+        cluster.handle_get_data(_datapoint(110, 20))
+        await wait_for_zigpy_tasks()
+        assert command.await_count == 2
+        sent = command.await_args.args[1].datapoints[0]
+        assert (sent.dp, sent.data.payload) == (110, 0)
+
+        # The old value does not replace the one that was written
+        assert cluster.get("alarm_soil_moisture_min") == 0
+
+        # The device confirms the write: nothing is sent again
+        cluster.handle_set_data_response(_datapoint(110, 0))
+        cluster.handle_get_data(_datapoint(5, 251))
+        await wait_for_zigpy_tasks()
+        assert command.await_count == 2
+        assert cluster.get("alarm_soil_moisture_min") == 0
+
+
+async def test_zg303z_resend_is_limited(zigpy_device_from_v2_quirk):
+    """A write the device never confirms is dropped after a few attempts."""
+    quirked = _hobeian_soil_sensor(zigpy_device_from_v2_quirk)
+    cluster = quirked.endpoints[1].tuya_manufacturer
+
+    with (
+        mock.patch.object(cluster, "command", new=mock.AsyncMock()) as command,
+        mock.patch("zhaquirks.tuya.tuya_sensor.time.monotonic") as monotonic,
+    ):
+        await cluster.write_attributes({"alarm_soil_moisture_min": 5})
+        await wait_for_zigpy_tasks()
+
+        for wake in range(1, 30):
+            monotonic.return_value = wake * 60
+            cluster.handle_get_data(_datapoint(5, 250))
+            await wait_for_zigpy_tasks()
+
+    assert command.await_count == cluster.MAX_ATTEMPTS

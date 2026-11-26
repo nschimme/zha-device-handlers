@@ -1,6 +1,7 @@
 """Tuya temp and humidity sensors."""
 
 import datetime
+import time
 
 import zigpy.types as t
 from zigpy.zcl import foundation
@@ -19,6 +20,8 @@ from zhaquirks.builder import (
 from zhaquirks.const import BatterySize
 from zhaquirks.tuya import (
     TUYA_SET_TIME,
+    TuyaCommand,
+    TuyaDatapointData,
     TuyaPowerConfigurationCluster2AAA,
     TuyaTimePayload,
 )
@@ -389,6 +392,92 @@ class NoManufTimeTuyaMCUCluster(TuyaMCUCluster):
 )
 
 
+class TuyaSleepyMCUCluster(TuyaMCUCluster):
+    """Tuya MCU cluster for battery devices that miss writes while they sleep.
+
+    The soil sensor only listens for a moment after it has sent a report. A
+    datapoint write sent at any other time is lost, but ZHA has already stored the
+    new value, so the entity shows a setting the device never received. The device
+    then reports its real value again when ZHA restarts. Each write is therefore
+    kept until the device echoes it back, and is sent again after the next frame
+    from the device, while it is awake.
+    """
+
+    RESEND_INTERVAL = 5  # seconds, one wake-up sends several frames
+    MAX_ATTEMPTS = 10
+
+    def __init__(self, *args, **kwargs) -> None:
+        """Init."""
+        super().__init__(*args, **kwargs)
+        self._pending_writes: dict[int, TuyaDatapointData] = {}
+        self._pending_attempts: dict[int, int] = {}
+        self._last_resend = 0.0
+
+    def tuya_mcu_command(self, cluster_data) -> None:
+        """Remember the written datapoints until the device confirms them."""
+        for command in self.from_cluster_data(cluster_data):
+            for datapoint in command.datapoints:
+                self._pending_writes[datapoint.dp] = datapoint
+                self._pending_attempts[datapoint.dp] = 1
+        super().tuya_mcu_command(cluster_data)
+
+    def handle_get_data(self, command: TuyaCommand):
+        """Handle reports and echoes, then retry writes the device has not confirmed."""
+        reported = []
+        for record in command.datapoints:
+            pending = self._pending_writes.get(record.dp)
+            if pending is None:
+                reported.append(record)
+            elif pending.data.payload == record.data.payload:
+                # The device has applied the write.
+                self._clear_pending(record.dp)
+                reported.append(record)
+            # else: the device still has the old value, which must not replace the
+            # value that was just written
+
+        status = foundation.Status.SUCCESS
+        if reported:
+            status = super().handle_get_data(
+                TuyaCommand(status=command.status, tsn=command.tsn, datapoints=reported)
+            )
+        self._resend_pending()
+        return status
+
+    handle_set_data_response = handle_get_data
+    handle_active_status_report = handle_get_data
+    handle_active_status_report_alt = handle_get_data
+
+    def _clear_pending(self, dp: int) -> None:
+        self._pending_writes.pop(dp, None)
+        self._pending_attempts.pop(dp, None)
+
+    def _resend_pending(self) -> None:
+        """Send unconfirmed writes again, as the device has just been heard."""
+        now = time.monotonic()
+        if not self._pending_writes or now - self._last_resend < self.RESEND_INTERVAL:
+            return
+        self._last_resend = now
+
+        for dp, datapoint in list(self._pending_writes.items()):
+            if self._pending_attempts[dp] >= self.MAX_ATTEMPTS:
+                self.warning("Giving up writing datapoint %s", dp)
+                self._clear_pending(dp)
+                continue
+            self._pending_attempts[dp] += 1
+            self.debug("Writing unconfirmed datapoint %s again", dp)
+            self.create_catching_task(
+                self.command(
+                    self.mcu_write_command,
+                    TuyaCommand(
+                        status=0,
+                        tsn=self.endpoint.device.application.get_sequence(),
+                        datapoints=[datapoint],
+                    ),
+                    expect_reply=False,
+                )
+            )
+
+
 (
     TuyaQuirkBuilder("HOBEIAN", "ZG-303Z")
     .applies_to("_TZE200_npj9bug3", "TS0601")  # COOLO CS-201Z
@@ -453,6 +542,12 @@ class NoManufTimeTuyaMCUCluster(TuyaMCUCluster):
         device_class=BinarySensorDeviceClass.MOISTURE,
         fallback_name="Moisture",
     )
+    # The device has a real RelativeHumidity (0x0405) cluster on endpoint 1, but it
+    # reports the *soil moisture* (DP 3) in it, not the air humidity. The cluster is
+    # removed and the air humidity (DP 109) goes on its own endpoint. If it stayed on
+    # endpoint 1 as a local 0x0405 cluster, it would still receive the device's own
+    # 0x0405 reports and be overwritten with the soil moisture. SoilMoisture (0x0408)
+    # does not clash with it, endpoint 1 only has to be free of 0x0405.
     .removes(RelativeHumidity.cluster_id)
     .adds_endpoint(2)
     .tuya_humidity(dp_id=109, endpoint_id=2)
@@ -494,5 +589,5 @@ class NoManufTimeTuyaMCUCluster(TuyaMCUCluster):
     )
     .tuya_enchantment(data_query_spell=True)
     .skip_configuration()
-    .add_to_registry()
+    .add_to_registry(replacement_cluster=TuyaSleepyMCUCluster)
 )
